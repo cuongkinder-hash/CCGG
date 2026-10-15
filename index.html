@@ -60,7 +60,13 @@ h1.title{margin:0;font-size:22px;font-weight:800;letter-spacing:-.01em}
 .stat .k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
 .stat .v{font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1}
 .stat.alert .v{color:var(--bad)} .stat.good .v{color:var(--ok)} .stat.warn .v{color:var(--warn)}
+button.stat{text-align:left;border:none;border-radius:0;font-weight:400;cursor:pointer;font-family:inherit}
+button.stat:hover{background:var(--soft)}
+button.stat[aria-selected="true"]{box-shadow:inset 0 -3px 0 var(--accent)}
 @media (max-width:640px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.locbar{display:flex;gap:6px;flex-wrap:wrap}
+.locbtn{padding:7px 16px;border-radius:999px}
+.locbtn[aria-selected="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line)}
 .tab{border:none;background:none;border-radius:0;padding:10px 14px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:600}
 .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
@@ -167,11 +173,17 @@ code.k{font-family:var(--f-mono);font-size:12px;background:var(--soft);padding:1
 
   <div id="notice" class="notice" hidden></div>
 
+  <div class="locbar" id="locbar">
+    <button class="locbtn" data-loc="all">Tất cả</button>
+    <button class="locbtn" data-loc="home">🏠 Nhà</button>
+    <button class="locbtn" data-loc="company">🏢 Công ty</button>
+  </div>
+
   <section class="stats">
-    <div class="stat"><span class="k">Tổng mail</span><span class="v" id="sAcc">0</span></div>
-    <div class="stat warn"><span class="k">Thiếu thông tin</span><span class="v" id="sMiss">0</span></div>
-    <div class="stat alert"><span class="k">Kênh có vấn đề</span><span class="v" id="sBad">0</span></div>
-    <div class="stat alert"><span class="k">Sự cố đang mở</span><span class="v" id="sOpen">0</span></div>
+    <button class="stat good" data-f="live"><span class="k">Mail live</span><span class="v" id="sLive">0</span></button>
+    <button class="stat warn" data-f="changed_no"><span class="k">Chưa đổi thông tin</span><span class="v" id="sChg">0</span></button>
+    <button class="stat warn" data-f="miss"><span class="k">Thiếu thông tin</span><span class="v" id="sMiss">0</span></button>
+    <button class="stat alert" data-f="problem"><span class="k">Có vấn đề</span><span class="v" id="sBad">0</span></button>
   </section>
 
   <div class="tabs" role="tablist">
@@ -216,6 +228,7 @@ const CH_STATUS={none:["Chưa có kênh","t-off"],normal:["Bình thường","t-o
 const TFA={off:["Chưa bật","t-off"],on:["Đã bật","t-ok"]};
 const INC_TYPE={copyright:"Gậy bản quyền",guidelines:"Gậy nguyên tắc cộng đồng",monetization:"Tắt kiếm tiền",removed:"Video bị gỡ",access:"Mất quyền truy cập",hacked:"Bị hack",login:"Lỗi đăng nhập / xác minh",other:"Khác"};
 const SEV={3:["Nghiêm trọng","t-bad"],2:["Trung bình","t-warn"],1:["Thấp","t-off"]};
+const LOCATION={home:["🏠 Nhà","t-ok"],company:["🏢 Công ty","t-warn"]};
 const VERIFY_CONST="SKM-UNLOCK-OK-v1";
 
 /* ---------------- crypto ---------------- */
@@ -241,14 +254,14 @@ async function decField(obj){
 const hasVal=o=>o&&typeof o==="object"&&!!o.ct;
 
 /* ---------------- state ---------------- */
-const S={accounts:[],incidents:[],tab:"acc",q:"",staff:"",status:"",loaded:{a:false,i:false}};
+const S={accounts:[],incidents:[],tab:"acc",loc:"all",q:"",staff:"",status:"",loaded:{a:false,i:false}};
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pill=(m,k)=>{const x=m[k];return x?`<span class="pill ${x[1]}">${x[0]}</span>`:""};
 const show=(id,on)=>{$(id).hidden=!on};
 function toast(m){const t=$("toast");t.textContent=m;t.hidden=false;clearTimeout(toast._t);toast._t=setTimeout(()=>t.hidden=true,2200)}
-try{const u=JSON.parse(localStorage.getItem("skm-ui")||"{}");if(u.tab)S.tab=u.tab}catch(e){}
-const saveUi=()=>{try{localStorage.setItem("skm-ui",JSON.stringify({tab:S.tab}))}catch(e){}};
+try{const u=JSON.parse(localStorage.getItem("skm-ui")||"{}");if(u.tab)S.tab=u.tab;if(u.loc)S.loc=u.loc}catch(e){}
+const saveUi=()=>{try{localStorage.setItem("skm-ui",JSON.stringify({tab:S.tab,loc:S.loc}))}catch(e){}};
 
 /* which fields count as "missing" */
 function missingOf(a){
@@ -260,6 +273,11 @@ function missingOf(a){
   else if(!hasVal(a.twofaRecovery))m.push("Mã 2FA");
   return m;
 }
+const locOf=a=>a.location==="company"?"company":"home";              // mặc định: Nhà
+const isLive=a=>a.accountStatus!=="locked"&&a.accountStatus!=="retired";
+const hasProblem=a=>a.accountStatus==="locked"||a.accountStatus==="verify"||["strike","demonetized","limited","terminated"].includes(a.channelStatus);
+const notChanged=a=>a.infoChanged!==true;
+const inLoc=a=>S.loc==="all"||locOf(a)===S.loc;
 const accById=id=>S.accounts.find(a=>a.id===id);
 const openCount=id=>S.incidents.filter(i=>i.accountId===id&&i.status!=="resolved").length;
 
@@ -360,27 +378,33 @@ function renderFilters(){
   if(S.staff&&!staffs.includes(S.staff))S.staff="";
   $("fStaff").innerHTML=`<option value="">Mọi nhân viên</option>`+staffs.map(s=>`<option ${s===S.staff?"selected":""}>${esc(s)}</option>`).join("");
   const opts=S.tab==="acc"
-    ?[["","Tất cả"],["miss","Còn thiếu thông tin"],["ch:normal","Kênh bình thường"],["ch:strike","Kênh có gậy"],["ch:demonetized","Mất kiếm tiền"],["ch:limited","Kênh bị hạn chế"],["ch:terminated","Kênh bị chấm dứt"],["ac:verify","Email cần xác minh"],["ac:locked","Email bị khóa"]]
+    ?[["","Tất cả"],["live","Mail live"],["changed_no","Chưa đổi thông tin"],["miss","Còn thiếu thông tin"],["problem","Có vấn đề"],["ch:normal","Kênh bình thường"],["ch:strike","Kênh có gậy"],["ch:demonetized","Mất kiếm tiền"],["ch:limited","Kênh bị hạn chế"],["ch:terminated","Kênh bị chấm dứt"],["ac:verify","Email cần xác minh"],["ac:locked","Email bị khóa"]]
     :[["","Tất cả"],["open","Đang mở"],["resolved","Đã xử lý"]];
   if(!opts.some(o=>o[0]===S.status))S.status="";
   $("fStatus").innerHTML=opts.map(([v,l])=>`<option value="${v}" ${v===S.status?"selected":""}>${l}</option>`).join("");
 }
 function render(){
   if($("scrApp").hidden)return;
-  const a=S.accounts;
-  $("sAcc").textContent=a.length;
-  $("sMiss").textContent=a.filter(x=>missingOf(x).length).length;
-  $("sBad").textContent=a.filter(x=>["strike","demonetized","limited","terminated"].includes(x.channelStatus)).length;
-  const open=S.incidents.filter(i=>i.status!=="resolved").length;
-  $("sOpen").textContent=open;
-  $("nAcc").textContent=a.length;$("nInc").textContent=open;
+  const la=S.accounts.filter(inLoc);
+  $("sLive").textContent=la.filter(isLive).length;
+  $("sChg").textContent=la.filter(notChanged).length;
+  $("sMiss").textContent=la.filter(x=>missingOf(x).length).length;
+  $("sBad").textContent=la.filter(hasProblem).length;
+  const open=S.incidents.filter(i=>{const ac=accById(i.accountId);return i.status!=="resolved"&&ac&&inLoc(ac)}).length;
+  $("nAcc").textContent=la.length;$("nInc").textContent=open;
   $("tabAcc").setAttribute("aria-selected",S.tab==="acc");$("tabInc").setAttribute("aria-selected",S.tab==="inc");
+  document.querySelectorAll("#locbar .locbtn").forEach(b=>b.setAttribute("aria-selected",b.dataset.loc===S.loc));
+  document.querySelectorAll(".stats .stat").forEach(b=>b.setAttribute("aria-selected",S.tab==="acc"&&b.dataset.f===S.status));
   renderFilters();
   const box=$("list");const q=S.q.trim().toLowerCase();
   if(S.tab==="acc"){
     if(!S.loaded.a){box.innerHTML=`<div class="empty">Đang tải…</div>`;return}
-    let rows=a.filter(x=>{
+    let rows=S.accounts.filter(x=>{
+      if(!inLoc(x))return false;
       if(S.staff&&x.staff!==S.staff)return false;
+      if(S.status==="live"&&!isLive(x))return false;
+      if(S.status==="problem"&&!hasProblem(x))return false;
+      if(S.status==="changed_no"&&!notChanged(x))return false;
       if(S.status==="miss"&&!missingOf(x).length)return false;
       if(S.status.startsWith("ch:")&&x.channelStatus!==S.status.slice(3))return false;
       if(S.status.startsWith("ac:")&&x.accountStatus!==S.status.slice(3))return false;
@@ -388,22 +412,24 @@ function render(){
       return true;
     });
     rows.sort((x,y)=>missingOf(y).length-missingOf(x).length||(x.staff||"").localeCompare(y.staff||"","vi")||(x.email||"").localeCompare(y.email||""));
-    if(!a.length){box.innerHTML=`<div class="empty"><b>Chưa có mail nào</b><span>Thêm mail đầu tiên, hoặc nhập hàng loạt từ danh sách có sẵn.</span><div style="display:flex;gap:8px"><button class="primary" id="e1">Thêm mail</button><button id="e2">Nhập hàng loạt</button></div></div>`;$("e1").onclick=()=>openAccount();$("e2").onclick=openImport;return}
+    if(!la.length){const where=S.loc==="all"?"":` cho nhóm ${LOCATION[S.loc][0]}`;box.innerHTML=`<div class="empty"><b>Chưa có mail nào${where}</b><span>Thêm mail đầu tiên, hoặc nhập hàng loạt từ danh sách có sẵn.</span><div style="display:flex;gap:8px"><button class="primary" id="e1">Thêm mail</button><button id="e2">Nhập hàng loạt</button></div></div>`;$("e1").onclick=()=>openAccount();$("e2").onclick=openImport;return}
     if(!rows.length){box.innerHTML=`<div class="empty">Không có mail nào khớp bộ lọc.</div>`;return}
-    box.innerHTML=`<table><thead><tr><th>Email</th><th>Nhân viên</th><th>Kênh</th><th>Tình trạng kênh</th><th>2FA</th><th>Thiếu</th><th>Sự cố</th></tr></thead><tbody>${rows.map(x=>{
+    box.innerHTML=`<table><thead><tr><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Kênh</th><th>Tình trạng kênh</th><th>2FA</th><th>Thiếu / Đổi TT</th><th>Sự cố</th></tr></thead><tbody>${rows.map(x=>{
       const miss=missingOf(x);const c=openCount(x.id);
       return `<tr data-acc="${x.id}">
         <td class="mono">${esc(x.email)}<div class="small">${pill(ACC_STATUS,x.accountStatus)}</div></td>
+        <td>${pill(LOCATION,locOf(x))}</td>
         <td>${esc(x.staff)||'<span class="small">—</span>'}</td>
         <td class="chan">${x.channelName?esc(x.channelName):'<span class="small">—</span>'}${x.channelUrl?`<div class="small"><a href="${esc(x.channelUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Mở ↗</a></div>`:""}</td>
         <td>${pill(CH_STATUS,x.channelStatus)}</td>
         <td>${pill(TFA,x.twofaStatus==="on"?"on":"off")}</td>
-        <td>${miss.length?`<div class="miss">${miss.map(m=>`<span class="mchip">${m}</span>`).join("")}</div>`:'<span class="full">Đủ ✓</span>'}</td>
+        <td><div class="miss">${miss.length?miss.map(m=>`<span class="mchip">${m}</span>`).join(""):'<span class="full">Đủ ✓</span>'}${notChanged(x)?'<span class="mchip" style="color:var(--warn);background:var(--warn-bg)">Chưa đổi TT</span>':""}</div></td>
         <td>${c?`<span class="cnt">${c}</span>`:'<span class="small">0</span>'}</td>
       </tr>`}).join("")}</tbody></table>`;
   }else{
     if(!S.loaded.i){box.innerHTML=`<div class="empty">Đang tải…</div>`;return}
     let rows=S.incidents.filter(i=>{const ac=accById(i.accountId)||{};
+      if(S.loc!=="all"&&accById(i.accountId)&&!inLoc(accById(i.accountId)))return false;
       if(S.staff&&ac.staff!==S.staff)return false;
       if(S.status==="open"&&i.status==="resolved")return false;
       if(S.status==="resolved"&&i.status!=="resolved")return false;
@@ -436,12 +462,16 @@ const opt=(m,sel)=>Object.entries(m).map(([k,v])=>`<option value="${k}" ${k===se
 const reveal=(id,label)=>`<div class="field"><label>${label}</label><div class="reveal"><div class="val" id="${id}">••••••</div><button type="button" class="mini" data-rev="${id}">Hiện</button><button type="button" class="mini" data-copy="${id}">Chép</button></div></div>`;
 
 function openAccount(id){
-  const x=id?accById(id):{accountStatus:"active",channelStatus:"none",twofaStatus:"off"};
+  const x=id?accById(id):{accountStatus:"active",channelStatus:"none",twofaStatus:"off",location:(S.loc==="company"?"company":"home")};
   const staffs=[...new Set(S.accounts.map(a=>a.staff).filter(Boolean))];
   const hist=id?S.incidents.filter(i=>i.accountId===id).sort((a,b)=>b.createdAt-a.createdAt):[];
   sheet(id?"Chi tiết mail":"Thêm mail",`
     <div class="field"><label for="fEmail">Email *</label><input id="fEmail" type="email" required value="${esc(x.email)}" placeholder="ten.kenh@gmail.com"></div>
     <div class="field"><label for="fStaffIn">Nhân viên phụ trách</label><input id="fStaffIn" list="staffL" value="${esc(x.staff)}"><datalist id="staffL">${staffs.map(s=>`<option value="${esc(s)}">`).join("")}</datalist></div>
+    <div class="row2">
+      <div class="field"><label for="fLoc">Nơi quản lý</label><select id="fLoc">${opt(LOCATION,locOf(x))}</select></div>
+      <div class="field"><label style="display:flex;gap:8px;align-items:center;margin-top:24px"><input type="checkbox" id="fChg" ${x.infoChanged?"checked":""} style="width:auto"> Đã đổi thông tin</label></div>
+    </div>
     <div class="field"><label for="fPw">Mật khẩu</label><div class="pwwrap"><input id="fPw" type="password" placeholder="${id&&hasVal(x.password)?"(giữ nguyên nếu để trống)":""}"><button type="button" data-peek="fPw">Hiện</button></div></div>
     <div class="field"><label for="fRec">Mail / SĐT khôi phục</label><input id="fRec" type="password" placeholder="${id&&hasVal(x.recovery)?"(giữ nguyên nếu để trống)":""}"></div>
     <div class="field"><label for="fPhone">Số điện thoại</label><input id="fPhone" type="password" placeholder="${id&&hasVal(x.phone)?"(giữ nguyên nếu để trống)":""}"></div>
@@ -480,7 +510,7 @@ function openAccount(id){
     $("bSave").disabled=true;
     try{
       const keep=(inp,old)=>$(inp).value?encField($(inp).value):Promise.resolve(id?(old||""):"");
-      const d={email,staff:$("fStaffIn").value.trim(),twofaStatus:$("fTfa").value,accountStatus:$("fAccSt").value,
+      const d={email,staff:$("fStaffIn").value.trim(),location:$("fLoc").value,infoChanged:$("fChg").checked,twofaStatus:$("fTfa").value,accountStatus:$("fAccSt").value,
         channelName:$("fChName").value.trim(),channelStatus:$("fChSt").value,channelUrl:$("fChUrl").value.trim(),note:$("fNote").value.trim(),
         password:await keep("fPw",x.password),recovery:await keep("fRec",x.recovery),phone:await keep("fPhone",x.phone),
         twofaRecovery:await keep("fTfaRec",x.twofaRecovery),updatedAt:Date.now(),createdAt:x.createdAt||Date.now()};
@@ -530,11 +560,13 @@ const HMAP=[
   [["sdt","so dien thoai","phone","dien thoai","sodienthoai"],"phone"],
   [["ma 2fa","2fa recovery","ma khoi phuc 2fa","backup codes","ma du phong"],"twofaRecovery"],
   [["2fa","bao mat 2 lop","two factor"],"twofaFlag"],
+  [["noi quan ly","noi","khu vuc","nhom","location"],"location"],
   [["ten kenh","kenh","channel","channel name"],"channelName"],
   [["link","url","link kenh","channel url"],"channelUrl"],
   [["ghi chu","note","notes","ghichu"],"note"],
 ];
 function mapHeader(h){const n=stripD(h);for(const[keys,f]of HMAP)if(keys.includes(n))return f;for(const[keys,f]of HMAP)if(keys.some(k=>n.includes(k)))return f;return null}
+function locFromText(v){const n=stripD(v);if(!n)return null;if(n.includes("cong ty")||n==="cty"||n.includes("company")||n.includes("cq")||n.includes("cong"))return "company";if(n.includes("nha")||n.includes("home"))return "home";return null}
 function parseText(txt){
   const lines=txt.replace(/\r/g,"").split("\n").filter(l=>l.trim());
   if(!lines.length)return{cols:[],rows:[]};
@@ -546,13 +578,16 @@ function parseText(txt){
 }
 function openImport(){
   sheet("Nhập hàng loạt",`
-    <p class="hint">Dán bảng từ Excel/Google Sheet (có dòng tiêu đề), hoặc chọn file CSV/TXT. Dòng đầu là tên cột. Cột nhận diện được: <code class="k">email</code> <code class="k">mật khẩu</code> <code class="k">nhân viên</code> <code class="k">khôi phục</code> <code class="k">sđt</code> <code class="k">2fa</code> <code class="k">mã 2fa</code> <code class="k">tên kênh</code> <code class="k">link</code> <code class="k">ghi chú</code>. Email là bắt buộc.</p>
+    <p class="hint">Dán bảng từ Excel/Google Sheet (có dòng tiêu đề), hoặc chọn file CSV/TXT. Cột nhận diện được: <code class="k">email</code> <code class="k">mật khẩu</code> <code class="k">nhân viên</code> <code class="k">khôi phục</code> <code class="k">sđt</code> <code class="k">2fa</code> <code class="k">mã 2fa</code> <code class="k">nơi quản lý</code> <code class="k">tên kênh</code> <code class="k">link</code> <code class="k">ghi chú</code>. Email là bắt buộc.</p>
+    <button type="button" id="bTpl" class="mini">⬇ Tải file mẫu (CSV)</button>
+    <div class="field"><label for="impLoc">Nếu cột "Nơi quản lý" để trống thì xếp vào nhóm:</label><select id="impLoc">${opt(LOCATION,S.loc==="company"?"company":"home")}</select></div>
     <div class="field"><label for="impFile">Chọn file (tùy chọn)</label><input id="impFile" type="file" accept=".csv,.txt,.tsv"></div>
-    <div class="field"><label for="impText">Hoặc dán vào đây</label><textarea id="impText" style="min-height:150px" placeholder="email	mật khẩu	nhân viên	tên kênh
-a@gmail.com	123abc	Nguyễn A	Bếp Nhà Mình"></textarea></div>
+    <div class="field"><label for="impText">Hoặc dán vào đây</label><textarea id="impText" style="min-height:140px" placeholder="email	mật khẩu	nhân viên	nơi quản lý	tên kênh
+a@gmail.com	123abc	Nguyễn A	Nhà	Bếp Nhà Mình"></textarea></div>
     <div id="impPrev"></div>
   `,`<button type="button" id="bCancel">Hủy</button><button class="primary" id="bDo" disabled>Nhập</button>`);
   $("bCancel").onclick=closeSheet;
+  $("bTpl").onclick=downloadTemplate;
   let parsed=null;
   const preview=()=>{
     const txt=$("impText").value;parsed=txt.trim()?parseText(txt):null;
@@ -568,6 +603,7 @@ a@gmail.com	123abc	Nguyễn A	Bếp Nhà Mình"></textarea></div>
   $("impFile").onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{$("impText").value=r.result;preview()};r.readAsText(f,"UTF-8")};
   $("bDo").onclick=async()=>{
     if(!parsed)return;
+    const defLoc=$("impLoc").value;
     const ci={};parsed.cols.forEach((c,idx)=>{if(c)ci[c]=idx});
     const existing=new Set(S.accounts.map(a=>a.email));
     const valid=parsed.rows.filter(r=>r[ci.email]&&/^\S+@\S+\.\S+$/.test(r[ci.email].trim()));
@@ -582,6 +618,7 @@ a@gmail.com	123abc	Nguyễn A	Bếp Nhà Mình"></textarea></div>
         existing.add(email);
         const tfaFlag=g("twofaFlag");const tfaRec=g("twofaRecovery");
         const d={email,staff:g("staff"),channelName:g("channelName"),channelUrl:g("channelUrl"),note:g("note"),
+          location:locFromText(g("location"))||defLoc,infoChanged:false,
           accountStatus:"active",channelStatus:g("channelName")?"normal":"none",
           twofaStatus:(tfaRec||/^(co|yes|on|bat|x|1|true)$/i.test(stripD(tfaFlag)))?"on":"off",
           password:await encField(g("password")),recovery:await encField(g("recovery")),phone:await encField(g("phone")),
@@ -595,22 +632,37 @@ a@gmail.com	123abc	Nguyễn A	Bếp Nhà Mình"></textarea></div>
   };
 }
 
+function downloadFile(name,text,type){
+  const url=URL.createObjectURL(new Blob([text],{type:type||"text/csv;charset=utf-8"}));
+  const a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function downloadTemplate(){
+  const q=v=>`"${String(v).replace(/"/g,'""')}"`;
+  const head=["Email","Mật khẩu","Nhân viên","Mail khôi phục","SĐT","2FA","Mã 2FA","Nơi quản lý","Tên kênh","Link kênh","Ghi chú"];
+  const rows=[
+    ["vd.nha@gmail.com","matkhau123","Nguyễn Văn A","kp.a@gmail.com","0901234567","Có","ABC1-DEF2-GHI3","Nhà","Bếp Nhà Mình","https://www.youtube.com/@bepnhaminh","(dòng ví dụ - xóa trước khi nhập)"],
+    ["vd.cty@gmail.com","matkhau456","Trần Thị B","kp.b@gmail.com","0907654321","Chưa","","Công ty","Review Công Nghệ","","(dòng ví dụ - xóa trước khi nhập)"]
+  ];
+  const csv="﻿"+[head.map(q).join(","),...rows.map(r=>r.map(q).join(","))].join("\r\n");
+  downloadFile("mau-nhap-mail.csv",csv);
+  toast("Đã tải file mẫu");
+}
+
 /* ---------------- export ---------------- */
 async function exportCsv(){
   if(!S.accounts.length){toast("Chưa có dữ liệu");return}
   const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
-  const head=["Email","Nhân viên","Mật khẩu","Mail khôi phục","SĐT","2FA","Mã 2FA","Trạng thái email","Tên kênh","Link kênh","Tình trạng kênh","Thiếu","Ghi chú"];
+  const head=["Email","Nơi quản lý","Nhân viên","Mật khẩu","Mail khôi phục","SĐT","2FA","Mã 2FA","Đã đổi TT","Trạng thái email","Tên kênh","Link kênh","Tình trạng kênh","Thiếu","Ghi chú"];
   const lines=[];
   for(const a of S.accounts){
-    lines.push([a.email,a.staff,await decField(a.password),await decField(a.recovery),await decField(a.phone),
-      a.twofaStatus==="on"?"Đã bật":"Chưa",await decField(a.twofaRecovery),ACC_STATUS[a.accountStatus]?.[0],
+    lines.push([a.email,LOCATION[locOf(a)][0].replace(/^..\s/,""),a.staff,await decField(a.password),await decField(a.recovery),await decField(a.phone),
+      a.twofaStatus==="on"?"Đã bật":"Chưa",await decField(a.twofaRecovery),a.infoChanged?"Rồi":"Chưa",ACC_STATUS[a.accountStatus]?.[0],
       a.channelName,a.channelUrl,CH_STATUS[a.channelStatus]?.[0],missingOf(a).join(" / "),a.note].map(q).join(","));
   }
   const csv="﻿"+[head.map(q).join(","),...lines].join("\r\n");
-  const url=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
-  const a=document.createElement("a");a.href=url;a.download=`so-mail-${new Date().toISOString().slice(0,10)}.csv`;
-  document.body.appendChild(a);a.click();a.remove();
-  setTimeout(()=>URL.revokeObjectURL(url),1000);toast("Đã tải CSV");
+  downloadFile(`so-mail-${new Date().toISOString().slice(0,10)}.csv`,csv);
+  toast("Đã tải CSV");
 }
 $("btnExport").onclick=()=>{
   sheet("Xuất CSV",`<p>File CSV sẽ chứa <b>mật khẩu, mã 2FA và mọi thông tin ở dạng chữ thường (không mã hóa)</b>, để bạn mở bằng Excel.</p><p class="hint">Chỉ xuất khi cần sao lưu, và giữ file thật cẩn thận. Xóa file sau khi dùng xong.</p>`,`<button type="button" id="bCancel">Hủy</button><button class="primary" id="bDo">Tải file ngay</button>`);
@@ -626,6 +678,8 @@ $("fStatus").onchange=e=>{S.status=e.target.value;render()};
 $("btnNewAcc").onclick=()=>openAccount();
 $("btnNewInc").onclick=()=>openIncident();
 $("btnImport").onclick=openImport;
+$("locbar").addEventListener("click",e=>{const b=e.target.closest(".locbtn");if(!b)return;S.loc=b.dataset.loc;saveUi();render()});
+document.querySelector(".stats").addEventListener("click",e=>{const b=e.target.closest(".stat");if(!b)return;S.tab="acc";S.status=S.status===b.dataset.f?"":b.dataset.f;saveUi();render()});
 $("list").addEventListener("click",e=>{const tr=e.target.closest("tr[data-acc],tr[data-inc]");if(!tr)return;tr.dataset.acc?openAccount(tr.dataset.acc):openIncident(tr.dataset.inc)});
 </script>
 </body>
