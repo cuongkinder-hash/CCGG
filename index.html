@@ -67,6 +67,11 @@ button.stat[aria-selected="true"]{box-shadow:inset 0 -3px 0 var(--accent)}
 .locbar{display:flex;gap:6px;flex-wrap:wrap}
 .locbtn{padding:7px 16px;border-radius:999px}
 .locbtn[aria-selected="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.selcol{width:34px;text-align:center}
+.selcol input{width:auto;cursor:pointer}
+tr.picked td{background:var(--soft)}
+.bulkbar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom,0));background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 34px rgba(10,12,20,.22);padding:10px 12px;display:flex;gap:7px;align-items:center;flex-wrap:wrap;z-index:25;max-width:calc(100% - 24px)}
+.bulkbar .cnt2{font-weight:700;white-space:nowrap;margin-right:2px}
 .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line)}
 .tab{border:none;background:none;border-radius:0;padding:10px 14px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:600}
 .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
@@ -200,6 +205,7 @@ code.k{font-family:var(--f-mono);font-size:12px;background:var(--soft);padding:1
   <div class="tablebox" id="list"><div class="empty">Đang tải…</div></div>
 </div>
 
+<div id="bulkbar" class="bulkbar" hidden></div>
 <div id="sheetHost"></div>
 <div id="toast" class="toast" hidden></div>
 
@@ -254,7 +260,7 @@ async function decField(obj){
 const hasVal=o=>o&&typeof o==="object"&&!!o.ct;
 
 /* ---------------- state ---------------- */
-const S={accounts:[],incidents:[],tab:"acc",loc:"all",q:"",staff:"",status:"",loaded:{a:false,i:false}};
+const S={accounts:[],incidents:[],tab:"acc",loc:"all",q:"",staff:"",status:"",loaded:{a:false,i:false},sel:new Set(),lastAccIds:[]};
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pill=(m,k)=>{const x=m[k];return x?`<span class="pill ${x[1]}">${x[0]}</span>`:""};
@@ -383,8 +389,11 @@ function renderFilters(){
   if(!opts.some(o=>o[0]===S.status))S.status="";
   $("fStatus").innerHTML=opts.map(([v,l])=>`<option value="${v}" ${v===S.status?"selected":""}>${l}</option>`).join("");
 }
-function render(){
+function render(){renderInner();renderBulk();}
+function renderInner(){
   if($("scrApp").hidden)return;
+  [...S.sel].forEach(id=>{if(!accById(id))S.sel.delete(id)});
+  S.lastAccIds=[];
   const la=S.accounts.filter(inLoc);
   $("sLive").textContent=la.filter(isLive).length;
   $("sChg").textContent=la.filter(notChanged).length;
@@ -414,9 +423,11 @@ function render(){
     rows.sort((x,y)=>missingOf(y).length-missingOf(x).length||(x.staff||"").localeCompare(y.staff||"","vi")||(x.email||"").localeCompare(y.email||""));
     if(!la.length){const where=S.loc==="all"?"":` cho nhóm ${LOCATION[S.loc][0]}`;box.innerHTML=`<div class="empty"><b>Chưa có mail nào${where}</b><span>Thêm mail đầu tiên, hoặc nhập hàng loạt từ danh sách có sẵn.</span><div style="display:flex;gap:8px"><button class="primary" id="e1">Thêm mail</button><button id="e2">Nhập hàng loạt</button></div></div>`;$("e1").onclick=()=>openAccount();$("e2").onclick=openImport;return}
     if(!rows.length){box.innerHTML=`<div class="empty">Không có mail nào khớp bộ lọc.</div>`;return}
-    box.innerHTML=`<table><thead><tr><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Kênh</th><th>Tình trạng kênh</th><th>2FA</th><th>Thiếu / Đổi TT</th><th>Sự cố</th></tr></thead><tbody>${rows.map(x=>{
+    S.lastAccIds=rows.map(x=>x.id);
+    box.innerHTML=`<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Kênh</th><th>Tình trạng kênh</th><th>2FA</th><th>Thiếu / Đổi TT</th><th>Sự cố</th></tr></thead><tbody>${rows.map(x=>{
       const miss=missingOf(x);const c=openCount(x.id);
-      return `<tr data-acc="${x.id}">
+      return `<tr data-acc="${x.id}" class="${S.sel.has(x.id)?"picked":""}">
+        <td class="selcol"><input type="checkbox" class="rowck" data-id="${x.id}" ${S.sel.has(x.id)?"checked":""}></td>
         <td class="mono">${esc(x.email)}<div class="small">${pill(ACC_STATUS,x.accountStatus)}</div></td>
         <td>${pill(LOCATION,locOf(x))}</td>
         <td>${esc(x.staff)||'<span class="small">—</span>'}</td>
@@ -550,6 +561,40 @@ function openIncident(id,accId){
 }
 async function saveWrap(fn,msg){try{await fn();closeSheet();toast(msg)}catch(e){const el=$("ferr");if(el)el.textContent="Lỗi: "+(e.code||e.message);else toast("Lỗi lưu")}}
 
+/* ---------------- chọn hàng loạt ---------------- */
+function toggleSel(id,on){on?S.sel.add(id):S.sel.delete(id);const tr=document.querySelector(`tr[data-acc="${id}"]`);if(tr)tr.classList.toggle("picked",on);renderBulk()}
+function toggleAll(on){(S.lastAccIds||[]).forEach(id=>on?S.sel.add(id):S.sel.delete(id));document.querySelectorAll("#list .rowck").forEach(c=>{c.checked=on;c.closest("tr").classList.toggle("picked",on)});renderBulk()}
+function syncSelAll(){const ids=S.lastAccIds||[],el=$("selAll");if(!el)return;const all=ids.length>0&&ids.every(id=>S.sel.has(id));el.checked=all;el.indeterminate=!all&&ids.some(id=>S.sel.has(id))}
+function renderBulk(){
+  const bar=$("bulkbar"),n=S.sel.size;syncSelAll();
+  if(!n||S.tab!=="acc"){bar.hidden=true;bar.innerHTML="";return}
+  bar.hidden=false;
+  bar.innerHTML=`<span class="cnt2">Đã chọn ${n}</span>
+    <button class="mini" data-b="home">→ 🏠 Nhà</button>
+    <button class="mini" data-b="company">→ 🏢 Cty</button>
+    <button class="mini" data-b="chg1">✓ Đã đổi TT</button>
+    <button class="mini" data-b="chg0">Chưa đổi TT</button>
+    <button class="mini" data-b="staff">Gán nhân viên…</button>
+    <button class="mini danger" data-b="del">Xóa</button>
+    <button class="mini ghost" data-b="clear">Bỏ chọn</button>`;
+  bar.querySelectorAll("[data-b]").forEach(b=>b.onclick=()=>bulkAction(b.dataset.b));
+}
+async function bulkWrite(ids,fn,msg){
+  try{let batch=writeBatch(db),n=0;for(const id of ids){fn(batch,id);if(++n>=400){await batch.commit();batch=writeBatch(db);n=0}}if(n>0)await batch.commit();S.sel.clear();toast(msg);render();}
+  catch(e){toast("Lỗi: "+(e.code||e.message))}
+}
+function bulkAction(kind){
+  if(kind==="clear"){S.sel.clear();render();return}
+  const ids=[...S.sel].filter(id=>accById(id));
+  if(!ids.length){toast("Chưa chọn mail");return}
+  const U=(data)=>(b,id)=>b.update(doc(db,"accounts",id),{...data,updatedAt:Date.now()});
+  if(kind==="home"||kind==="company")return bulkWrite(ids,U({location:kind}),`Đã chuyển ${ids.length} mail sang ${LOCATION[kind][0]}`);
+  if(kind==="chg1")return bulkWrite(ids,U({infoChanged:true}),`Đã đánh dấu ${ids.length} mail: đã đổi TT`);
+  if(kind==="chg0")return bulkWrite(ids,U({infoChanged:false}),`Đã đánh dấu ${ids.length} mail: chưa đổi TT`);
+  if(kind==="staff"){const name=prompt(`Gán nhân viên phụ trách cho ${ids.length} mail (để trống = xóa tên):`);if(name===null)return;return bulkWrite(ids,U({staff:name.trim()}),"Đã gán nhân viên")}
+  if(kind==="del"){if(!confirm(`Xóa ${ids.length} mail đã chọn? Không khôi phục được.`))return;return bulkWrite(ids,(b,id)=>b.delete(doc(db,"accounts",id)),`Đã xóa ${ids.length} mail`)}
+}
+
 /* ---------------- bulk import ---------------- */
 const stripD=s=>s.normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/đ/g,"d").replace(/Đ/g,"D").toLowerCase().trim();
 const HMAP=[
@@ -681,16 +726,20 @@ $("btnExport").onclick=()=>{
 
 /* ---------------- wiring ---------------- */
 $("tabAcc").onclick=()=>{S.tab="acc";S.status="";saveUi();render()};
-$("tabInc").onclick=()=>{S.tab="inc";S.status="";saveUi();render()};
+$("tabInc").onclick=()=>{S.tab="inc";S.status="";S.sel.clear();saveUi();render()};
 $("q").oninput=e=>{S.q=e.target.value;render()};
 $("fStaff").onchange=e=>{S.staff=e.target.value;render()};
 $("fStatus").onchange=e=>{S.status=e.target.value;render()};
 $("btnNewAcc").onclick=()=>openAccount();
 $("btnNewInc").onclick=()=>openIncident();
 $("btnImport").onclick=openImport;
-$("locbar").addEventListener("click",e=>{const b=e.target.closest(".locbtn");if(!b)return;S.loc=b.dataset.loc;saveUi();render()});
+$("locbar").addEventListener("click",e=>{const b=e.target.closest(".locbtn");if(!b)return;S.loc=b.dataset.loc;S.sel.clear();saveUi();render()});
 document.querySelector(".stats").addEventListener("click",e=>{const b=e.target.closest(".stat");if(!b)return;S.tab="acc";S.status=S.status===b.dataset.f?"":b.dataset.f;saveUi();render()});
-$("list").addEventListener("click",e=>{const tr=e.target.closest("tr[data-acc],tr[data-inc]");if(!tr)return;tr.dataset.acc?openAccount(tr.dataset.acc):openIncident(tr.dataset.inc)});
+$("list").addEventListener("click",e=>{
+  const ck=e.target.closest("input.rowck");if(ck){toggleSel(ck.dataset.id,ck.checked);e.stopPropagation();return}
+  if(e.target.id==="selAll"){toggleAll(e.target.checked);return}
+  const tr=e.target.closest("tr[data-acc],tr[data-inc]");if(!tr)return;tr.dataset.acc?openAccount(tr.dataset.acc):openIncident(tr.dataset.inc);
+});
 </script>
 </body>
 </html>
