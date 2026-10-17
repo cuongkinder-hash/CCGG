@@ -567,9 +567,16 @@ const HMAP=[
 ];
 function mapHeader(h){const n=stripD(h);for(const[keys,f]of HMAP)if(keys.includes(n))return f;for(const[keys,f]of HMAP)if(keys.some(k=>n.includes(k)))return f;return null}
 function locFromText(v){const n=stripD(v);if(!n)return null;if(n.includes("cong ty")||n==="cty"||n.includes("company")||n.includes("cq")||n.includes("cong"))return "company";if(n.includes("nha")||n.includes("home"))return "home";return null}
+const EMAIL_RE=/^\S+@\S+\.\S+$/;
 function parseText(txt){
-  const lines=txt.replace(/\r/g,"").split("\n").filter(l=>l.trim());
+  const lines=txt.replace(/\r/g,"").split("\n").map(l=>l.trim()).filter(Boolean);
   if(!lines.length)return{cols:[],rows:[]};
+  // Trường hợp chỉ dán danh sách email (mỗi dòng một email, không có tiêu đề)
+  const noDelim=lines.every(l=>!/[\t,;]/.test(l));
+  const emailish=lines.filter(l=>EMAIL_RE.test(l)).length;
+  if(noDelim&&EMAIL_RE.test(lines[0])&&emailish>=Math.ceil(lines.length*0.6)){
+    return{cols:["email"],header:["email"],rows:lines.map(l=>[l]),bare:true};
+  }
   const delim=lines[0].includes("\t")?"\t":(lines[0].split(";").length>lines[0].split(",").length?";":",");
   const cells=l=>l.split(delim).map(c=>c.trim().replace(/^"|"$/g,""));
   const header=cells(lines[0]);const cols=header.map(mapHeader);
@@ -578,12 +585,14 @@ function parseText(txt){
 }
 function openImport(){
   sheet("Nhập hàng loạt",`
-    <p class="hint">Dán bảng từ Excel/Google Sheet (có dòng tiêu đề), hoặc chọn file CSV/TXT. Cột nhận diện được: <code class="k">email</code> <code class="k">mật khẩu</code> <code class="k">nhân viên</code> <code class="k">khôi phục</code> <code class="k">sđt</code> <code class="k">2fa</code> <code class="k">mã 2fa</code> <code class="k">nơi quản lý</code> <code class="k">tên kênh</code> <code class="k">link</code> <code class="k">ghi chú</code>. Email là bắt buộc.</p>
+    <p class="hint"><b>Cách 1 — chỉ email:</b> dán danh sách email, mỗi email một dòng (không cần tiêu đề). App thêm hết, thông tin khác để trống bổ sung sau.<br><b>Cách 2 — đầy đủ:</b> dán bảng từ Excel/Google Sheet có dòng tiêu đề, hoặc chọn file CSV/TXT. Cột nhận được: <code class="k">email</code> <code class="k">mật khẩu</code> <code class="k">nhân viên</code> <code class="k">khôi phục</code> <code class="k">sđt</code> <code class="k">2fa</code> <code class="k">mã 2fa</code> <code class="k">nơi quản lý</code> <code class="k">tên kênh</code> <code class="k">link</code> <code class="k">ghi chú</code>.</p>
     <button type="button" id="bTpl" class="mini">⬇ Tải file mẫu (CSV)</button>
     <div class="field"><label for="impLoc">Nếu cột "Nơi quản lý" để trống thì xếp vào nhóm:</label><select id="impLoc">${opt(LOCATION,S.loc==="company"?"company":"home")}</select></div>
     <div class="field"><label for="impFile">Chọn file (tùy chọn)</label><input id="impFile" type="file" accept=".csv,.txt,.tsv"></div>
-    <div class="field"><label for="impText">Hoặc dán vào đây</label><textarea id="impText" style="min-height:140px" placeholder="email	mật khẩu	nhân viên	nơi quản lý	tên kênh
-a@gmail.com	123abc	Nguyễn A	Nhà	Bếp Nhà Mình"></textarea></div>
+    <div class="field"><label for="impText">Hoặc dán vào đây</label><textarea id="impText" style="min-height:140px" placeholder="Dán danh sách email, mỗi dòng một email:
+kenh01@gmail.com
+kenh02@gmail.com
+kenh03@gmail.com"></textarea></div>
     <div id="impPrev"></div>
   `,`<button type="button" id="bCancel">Hủy</button><button class="primary" id="bDo" disabled>Nhập</button>`);
   $("bCancel").onclick=closeSheet;
@@ -596,7 +605,8 @@ a@gmail.com	123abc	Nguyễn A	Nhà	Bếp Nhà Mình"></textarea></div>
     const ei=parsed.cols.indexOf("email");
     const valid=ei>=0?parsed.rows.filter(r=>r[ei]&&/^\S+@\S+\.\S+$/.test(r[ei])).length:0;
     const got=parsed.cols.filter(Boolean);
-    box.innerHTML=`<div class="imp-prev">Nhận diện cột: <b>${got.length?got.join(", "):"(không rõ)"}</b><br>Số dòng có email hợp lệ: <b>${valid}</b>${ei<0?'<br><span style="color:var(--bad)">⚠️ Chưa thấy cột email — kiểm tra lại dòng tiêu đề.</span>':""}</div>`;
+    const bareNote=parsed.bare?'<br><span style="color:var(--ok)">Chế độ danh sách email: chỉ thêm email, các thông tin khác để trống (bổ sung sau).</span>':"";
+    box.innerHTML=`<div class="imp-prev">${parsed.bare?"":"Nhận diện cột: <b>"+(got.length?got.join(", "):"(không rõ)")+"</b><br>"}Số email hợp lệ: <b>${valid}</b>${bareNote}${ei<0?'<br><span style="color:var(--bad)">⚠️ Chưa thấy cột email — kiểm tra lại dòng tiêu đề.</span>':""}</div>`;
     $("bDo").disabled=!(valid>0);$("bDo").textContent=`Nhập ${valid} mail`;
   };
   $("impText").oninput=preview;
