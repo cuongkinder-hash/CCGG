@@ -176,6 +176,7 @@ code.k{font-family:var(--f-mono);font-size:12px;background:var(--soft);padding:1
     </div>
     <div class="hbtns">
       <button id="btnImport">Nhập hàng loạt</button>
+      <button id="btnDup">Quét trùng</button>
       <button id="btnExport">Xuất CSV</button>
       <button id="btnNewInc">Báo sự cố</button>
       <button id="btnNewAcc" class="primary">Thêm mail</button>
@@ -274,6 +275,14 @@ async function decField(obj){
   catch(e){return "⚠️ sai mật khẩu chính";}
 }
 const hasVal=o=>o&&typeof o==="object"&&!!o.ct;
+/* vân tay (hash) để chống trùng mà không lộ nội dung */
+async function sha256hex(s){const b=await crypto.subtle.digest("SHA-256",te.encode(s));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("")}
+const normPhone=s=>String(s||"").replace(/\D/g,"");
+const norm2fa=s=>String(s||"").replace(/\s+/g,"").toLowerCase();
+const hashPhone=async v=>{const n=normPhone(v);return n?await sha256hex("p:"+n):""};
+const hash2fa=async v=>{const n=norm2fa(v);return n?await sha256hex("t:"+n):""};
+async function phoneHashOf(a){if(a.phoneHash!==undefined&&a.phoneHash!=="")return a.phoneHash;if(a.phoneHash==="")return "";if(!hasVal(a.phone))return "";return hashPhone(await decField(a.phone))}
+async function twofaHashOf(a){if(a.twofaHash!==undefined&&a.twofaHash!=="")return a.twofaHash;if(a.twofaHash==="")return "";if(!hasVal(a.twofaRecovery))return "";return hash2fa(await decField(a.twofaRecovery))}
 
 /* ---------------- state ---------------- */
 const S={accounts:[],incidents:[],tab:"acc",loc:"all",q:"",staff:"",status:"",loaded:{a:false,i:false},sel:new Set(),lastAccIds:[]};
@@ -630,6 +639,13 @@ function openAccount(id){
         idVerified:$("fIdV").checked,taxAdded:$("fTax").checked,bankAdded:$("fBank").checked,monetized:$("fMon").checked,gaSold:$("fSold").checked,gaLinkedTo:$("fLinked").value.trim(),
         password:await keep("fPw",x.password),recovery:await keep("fRec",x.recovery),phone:await keep("fPhone",x.phone),
         twofaRecovery:await keep("fTfaRec",x.twofaRecovery),updatedAt:Date.now(),createdAt:x.createdAt||Date.now()};
+      // vân tay chống trùng
+      const phonePlain=$("fPhone").value.trim()||(id&&hasVal(x.phone)?await decField(x.phone):"");
+      const tfaPlain=$("fTfaRec").value.trim()||(id&&hasVal(x.twofaRecovery)?await decField(x.twofaRecovery):"");
+      d.phoneHash=await hashPhone(phonePlain);
+      d.twofaHash=await hash2fa(tfaPlain);
+      if(d.phoneHash){for(const a of S.accounts){if(a.id===id)continue;if(await phoneHashOf(a)===d.phoneHash){$("ferr").textContent=`SĐT này đã dùng cho mail: ${a.email}`;$("bSave").disabled=false;return}}}
+      if(d.twofaHash){for(const a of S.accounts){if(a.id===id)continue;if(await twofaHashOf(a)===d.twofaHash){$("ferr").textContent=`Mã 2FA này đã dùng cho mail: ${a.email}`;$("bSave").disabled=false;return}}}
       await setDoc(doc(db,"accounts",id||crypto.randomUUID()),d);
       closeSheet();toast(id?"Đã lưu":"Đã thêm mail");
     }catch(e){$("ferr").textContent="Lưu lỗi: "+(e.code||e.message);$("bSave").disabled=false}
@@ -706,6 +722,28 @@ function bulkAction(kind){
   if(kind==="del"){if(!confirm(`Xóa ${ids.length} mail đã chọn? Không khôi phục được.`))return;return bulkWrite(ids,(b,id)=>b.delete(doc(db,"accounts",id)),`Đã xóa ${ids.length} mail`)}
 }
 
+/* ---------------- quét trùng ---------------- */
+async function scanDuplicates(){
+  if(!S.accounts.length){toast("Chưa có dữ liệu");return}
+  toast("Đang quét…");
+  const byEmail={},byPhone={},by2fa={};
+  for(const a of S.accounts){
+    const e=(a.email||"").toLowerCase();(byEmail[e]=byEmail[e]||[]).push(a.email);
+    const ph=await phoneHashOf(a);if(ph)(byPhone[ph]=byPhone[ph]||[]).push(a.email);
+    const th=await twofaHashOf(a);if(th)(by2fa[th]=by2fa[th]||[]).push(a.email);
+  }
+  const dup=o=>Object.values(o).filter(v=>v.length>1);
+  const de=dup(byEmail),dp=dup(byPhone),dt=dup(by2fa);
+  const grp=(title,arr,note)=>`<div class="grp"><div class="gt">${title} — ${arr.length} nhóm</div>${arr.length?arr.map(v=>`<div class="imp-prev">${note}<br>${v.map(esc).join("<br>")}</div>`).join(""):'<span class="small">Không có trùng ✓</span>'}</div>`;
+  sheet("Quét trùng",`
+    <p class="hint">Dò toàn bộ ${S.accounts.length} mail. Các mail cùng một SĐT/2FA được gom nhóm (không hiển thị giá trị để giữ an toàn).</p>
+    ${grp("Trùng Email",de,"Cùng một email:")}
+    ${grp("Trùng SĐT",dp,"Các mail dùng chung một SĐT:")}
+    ${grp("Trùng mã 2FA",dt,"Các mail dùng chung một mã 2FA:")}
+  `,`<button type="button" id="bCancel">Đóng</button>`);
+  $("bCancel").onclick=closeSheet;
+}
+
 /* ---------------- bulk import ---------------- */
 const stripD=s=>s.normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/đ/g,"d").replace(/Đ/g,"D").toLowerCase().trim();
 const HMAP=[
@@ -775,30 +813,39 @@ kenh03@gmail.com"></textarea></div>
     const ci={};parsed.cols.forEach((c,idx)=>{if(c)ci[c]=idx});
     const existing=new Set(S.accounts.map(a=>a.email));
     const valid=parsed.rows.filter(r=>r[ci.email]&&/^\S+@\S+\.\S+$/.test(r[ci.email].trim()));
-    $("bDo").disabled=true;$("bDo").textContent="Đang mã hóa & nhập…";
-    let added=0,skipped=0;
+    $("bDo").disabled=true;$("bDo").textContent="Đang kiểm tra trùng…";
+    let added=0,skEmail=0,skPhone=0,sk2fa=0;
     try{
+      // tập vân tay SĐT/2FA đã có (giải mã dữ liệu cũ nếu cần)
+      const existPhone=new Map(),exist2fa=new Map();
+      for(const a of S.accounts){const ph=await phoneHashOf(a);if(ph)existPhone.set(ph,a.email);const th=await twofaHashOf(a);if(th)exist2fa.set(th,a.email);}
+      $("bDo").textContent="Đang mã hóa & nhập…";
       let batch=writeBatch(db),n=0;
       for(const r of valid){
         const g=k=>ci[k]!=null?(r[ci[k]]||"").trim():"";
         const email=g("email").toLowerCase();
-        if(existing.has(email)){skipped++;continue}
-        existing.add(email);
-        const tfaFlag=g("twofaFlag");const tfaRec=g("twofaRecovery");
+        if(existing.has(email)){skEmail++;continue}
+        const tfaFlag=g("twofaFlag");const tfaRec=g("twofaRecovery");const phPlain=g("phone");
+        const phh=await hashPhone(phPlain), thh=await hash2fa(tfaRec);
+        if(phh&&existPhone.has(phh)){skPhone++;continue}
+        if(thh&&exist2fa.has(thh)){sk2fa++;continue}
+        existing.add(email);if(phh)existPhone.set(phh,email);if(thh)exist2fa.set(thh,email);
         const d={email,staff:g("staff"),channelName:g("channelName"),channelUrl:g("channelUrl"),note:g("note"),
           location:locFromText(g("location"))||defLoc,infoChanged:false,
           accountStatus:"active",channelStatus:g("channelName")?"normal":"none",
           stage:"none",appeal:"none",appealedAt:null,workStartDate:null,
           purchaseDate:dparse(g("purchaseDate")),purchaseSource:g("purchaseSource"),phoneDate:Date.now(),
           idVerified:false,taxAdded:false,bankAdded:false,monetized:false,gaSold:false,gaLinkedTo:"",
+          phoneHash:phh,twofaHash:thh,
           twofaStatus:(tfaRec||/^(co|yes|on|bat|x|1|true)$/i.test(stripD(tfaFlag)))?"on":"off",
-          password:await encField(g("password")),recovery:await encField(g("recovery")),phone:await encField(g("phone")),
+          password:await encField(g("password")),recovery:await encField(g("recovery")),phone:await encField(phPlain),
           twofaRecovery:await encField(tfaRec),createdAt:Date.now(),updatedAt:Date.now()};
         batch.set(doc(db,"accounts",crypto.randomUUID()),d);added++;n++;
         if(n>=400){await batch.commit();batch=writeBatch(db);n=0}
       }
       if(n>0)await batch.commit();
-      closeSheet();toast(`Đã nhập ${added} mail${skipped?`, bỏ qua ${skipped} trùng`:""}`);
+      const sk=[];if(skEmail)sk.push(`${skEmail} trùng email`);if(skPhone)sk.push(`${skPhone} trùng SĐT`);if(sk2fa)sk.push(`${sk2fa} trùng 2FA`);
+      closeSheet();toast(`Đã nhập ${added} mail${sk.length?`, bỏ qua ${sk.join(", ")}`:""}`);
     }catch(e){$("impPrev").innerHTML=`<div class="imp-prev" style="color:var(--bad)">Lỗi khi nhập: ${esc(e.code||e.message)}. Đã nhập ${added} mail trước đó.</div>`;$("bDo").disabled=false;$("bDo").textContent="Thử lại"}
   };
 }
@@ -856,6 +903,7 @@ $("fStatus").onchange=e=>{S.status=e.target.value;render()};
 $("btnNewAcc").onclick=()=>openAccount();
 $("btnNewInc").onclick=()=>openIncident();
 $("btnImport").onclick=openImport;
+$("btnDup").onclick=scanDuplicates;
 $("locbar").addEventListener("click",e=>{const b=e.target.closest(".locbtn");if(!b)return;S.loc=b.dataset.loc;S.sel.clear();saveUi();render()});
 document.querySelector(".stats").addEventListener("click",e=>{const b=e.target.closest(".stat");if(!b)return;S.tab="acc";S.status=S.status===b.dataset.f?"":b.dataset.f;saveUi();render()});
 $("list").addEventListener("click",e=>{
