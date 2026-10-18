@@ -94,6 +94,8 @@ td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
 tr:last-child td{border-bottom:none}
 tbody tr{cursor:pointer} tbody tr:hover td{background:var(--soft)}
 .mono{font-family:var(--f-mono);font-size:12.5px;word-break:break-all}
+.cpmail{cursor:pointer;border-radius:4px;padding:1px 2px}
+.cpmail:hover{text-decoration:underline dotted;background:var(--soft)}
 .small{font-size:12px;color:var(--muted)}
 .chan a{color:var(--accent);text-decoration:none} .chan a:hover{text-decoration:underline}
 .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px;white-space:nowrap}
@@ -533,7 +535,7 @@ function accTable(rows){
     const miss=missingOf(x);const c=openCount(x.id);
     return `<tr data-acc="${x.id}" class="${S.sel.has(x.id)?"picked":""}">
       <td class="selcol"><input type="checkbox" class="rowck" data-id="${x.id}" ${S.sel.has(x.id)?"checked":""}></td>
-      <td class="mono">${esc(x.email)}<div class="small">${pill(ACC_STATUS,x.accountStatus)}</div></td>
+      <td class="mono"><span class="cpmail" data-email="${esc(x.email)}" title="Bấm để copy email">${esc(x.email)}</span><div class="small">${pill(ACC_STATUS,x.accountStatus)}</div></td>
       <td>${pill(LOCATION,locOf(x))}</td>
       <td>${esc(x.staff)||'<span class="small">—</span>'}</td>
       <td class="chan">${x.channelName?esc(x.channelName):'<span class="small">—</span>'}${x.channelUrl?`<div class="small"><a href="${esc(x.channelUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Mở ↗</a></div>`:""}</td>
@@ -546,7 +548,7 @@ function accTable(rows){
 }
 function gaTable(rows){
   return `<table><thead><tr><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Kênh</th><th>Duyệt</th><th>Trạng thái gà</th><th>Xác minh / Kiếm tiền</th></tr></thead><tbody>${rows.map(x=>`<tr data-acc="${x.id}">
-      <td class="mono">${esc(x.email)}</td>
+      <td class="mono"><span class="cpmail" data-email="${esc(x.email)}" title="Bấm để copy email">${esc(x.email)}</span></td>
       <td>${pill(LOCATION,locOf(x))}</td>
       <td>${esc(x.staff)||'<span class="small">—</span>'}</td>
       <td class="chan">${x.channelName?esc(x.channelName):'<span class="small">—</span>'}${x.channelUrl?`<div class="small"><a href="${esc(x.channelUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Mở ↗</a></div>`:""}</td>
@@ -939,7 +941,12 @@ $("btnDup").onclick=scanDuplicates;
 $("locbar").addEventListener("click",e=>{const b=e.target.closest(".locbtn");if(!b)return;S.loc=b.dataset.loc;S.sel.clear();saveUi();render()});
 $("gaBar").addEventListener("click",e=>{const b=e.target.closest(".locbtn");if(!b)return;S.status=b.dataset.gf;render()});
 document.querySelector(".stats").addEventListener("click",e=>{const b=e.target.closest(".stat");if(!b)return;S.tab="acc";S.status=S.status===b.dataset.f?"":b.dataset.f;saveUi();render()});
+async function copyEmail(em){
+  try{await navigator.clipboard.writeText(em);toast("Đã copy: "+em)}
+  catch(e){const t=document.createElement("textarea");t.value=em;t.style.position="fixed";t.style.opacity="0";document.body.appendChild(t);t.select();try{document.execCommand("copy");toast("Đã copy: "+em)}catch(_){toast("Không copy được")}t.remove()}
+}
 $("list").addEventListener("click",e=>{
+  const cm=e.target.closest(".cpmail");if(cm){copyEmail(cm.dataset.email);e.stopPropagation();return}
   const ck=e.target.closest("input.rowck");if(ck){toggleSel(ck.dataset.id,ck.checked);e.stopPropagation();return}
   if(e.target.id==="selAll"){toggleAll(e.target.checked);return}
   const tr=e.target.closest("tr[data-acc],tr[data-inc]");if(!tr)return;tr.dataset.acc?openAccount(tr.dataset.acc):openIncident(tr.dataset.inc);
