@@ -682,6 +682,12 @@ function openIncident(id,accId){
 }
 async function saveWrap(fn,msg){try{await fn();closeSheet();toast(msg)}catch(e){const el=$("ferr");if(el)el.textContent="Lỗi: "+(e.code||e.message);else toast("Lỗi lưu")}}
 
+function copyFallback(text,count){
+  sheet("Copy email",`<p class="hint">Trình duyệt không cho copy tự động. Bôi đen toàn bộ ô dưới rồi Ctrl+C (trên điện thoại thì giữ để chọn rồi Copy).</p><textarea id="cpArea" readonly style="min-height:220px;font-family:var(--f-mono);font-size:13px">${esc(text)}</textarea>`,`<button type="button" id="bCancel">Đóng</button><button class="primary" id="bCopy">Thử copy lại</button>`);
+  $("bCancel").onclick=closeSheet;const ta=$("cpArea");ta.focus();ta.select();
+  $("bCopy").onclick=async()=>{ta.select();try{await navigator.clipboard.writeText(text);toast(`Đã copy ${count} email`);closeSheet()}catch(e){try{document.execCommand("copy");toast("Đã copy");closeSheet()}catch(_){toast("Hãy bôi đen rồi Ctrl+C")}}};
+}
+
 /* ---------------- chọn hàng loạt ---------------- */
 function toggleSel(id,on){on?S.sel.add(id):S.sel.delete(id);const tr=document.querySelector(`tr[data-acc="${id}"]`);if(tr)tr.classList.toggle("picked",on);renderBulk()}
 function toggleAll(on){(S.lastAccIds||[]).forEach(id=>on?S.sel.add(id):S.sel.delete(id));document.querySelectorAll("#list .rowck").forEach(c=>{c.checked=on;c.closest("tr").classList.toggle("picked",on)});renderBulk()}
@@ -696,10 +702,12 @@ function renderBulk(){
     <button class="mini" data-b="st:working">→ Đang làm</button>
     <button class="mini" data-b="st:ga">→ 🐔 Tạo gà</button>
     <button class="mini" data-b="st:redo">→ Làm lại</button>
+    <button class="mini" data-b="restrict">→ Bị hạn chế</button>
     <button class="mini" data-b="phone">Gia hạn SĐT</button>
     <button class="mini" data-b="chg1">✓ Đã đổi TT</button>
     <button class="mini" data-b="chg0">Chưa đổi TT</button>
     <button class="mini" data-b="staff">Gán nhân viên…</button>
+    <button class="mini" data-b="copy">📋 Copy email</button>
     <button class="mini danger" data-b="del">Xóa</button>
     <button class="mini ghost" data-b="clear">Bỏ chọn</button>`;
   bar.querySelectorAll("[data-b]").forEach(b=>b.onclick=()=>bulkAction(b.dataset.b));
@@ -712,7 +720,15 @@ function bulkAction(kind){
   if(kind==="clear"){S.sel.clear();render();return}
   const ids=[...S.sel].filter(id=>accById(id));
   if(!ids.length){toast("Chưa chọn mail");return}
+  if(kind==="copy"){
+    const order=(S.lastAccIds&&S.lastAccIds.length?S.lastAccIds:ids).filter(id=>S.sel.has(id));
+    const emails=order.map(id=>accById(id)?.email).filter(Boolean);
+    const text=emails.join("\n");
+    (async()=>{try{await navigator.clipboard.writeText(text);toast(`Đã copy ${emails.length} email`)}catch(e){copyFallback(text,emails.length)}})();
+    return;
+  }
   const U=(data)=>(b,id)=>b.update(doc(db,"accounts",id),{...data,updatedAt:Date.now()});
+  if(kind==="restrict")return bulkWrite(ids,U({channelStatus:"limited"}),`Đã đánh dấu ${ids.length} mail bị hạn chế`);
   if(kind==="home"||kind==="company")return bulkWrite(ids,U({location:kind}),`Đã chuyển ${ids.length} mail sang ${LOCATION[kind][0]}`);
   if(kind.startsWith("st:")){const st=kind.slice(3);return bulkWrite(ids,U({stage:st}),`Đã chuyển ${ids.length} mail sang ${STAGE[st][0]}`)}
   if(kind==="phone")return bulkWrite(ids,U({phoneDate:Date.now()}),`Đã gia hạn SĐT ${ids.length} mail (+90 ngày)`);
