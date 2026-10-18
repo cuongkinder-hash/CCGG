@@ -321,7 +321,7 @@ const stageOf=a=>STAGE[a.stage]?a.stage:"none";
 const appealOf=a=>APPEAL[a.appeal]?a.appeal:"none";
 const isGa=a=>stageOf(a)==="ga";
 const reviewOf=a=>a.gaReview==="approved"?"approved":"waiting";
-const isWorking=a=>stageOf(a)==="working";
+const isWorking=a=>stageOf(a)==="working"&&a.channelStatus!=="limited";  // bị hạn chế thì không tính đang làm
 const isRedo=a=>stageOf(a)==="redo";
 const isLive=a=>a.accountStatus!=="locked"&&a.accountStatus!=="retired";
 const hasProblem=a=>a.accountStatus==="locked"||a.accountStatus==="verify"||["strike","demonetized","limited","terminated"].includes(a.channelStatus);
@@ -763,7 +763,7 @@ function bulkAction(kind){
   if(kind==="diss1")return bulkWrite(ids,U({gaDissed:true}),`Đã đánh dấu ${ids.length} gà bị diss`);
   if(kind==="diss0")return bulkWrite(ids,U({gaDissed:false}),`Đã bỏ diss ${ids.length} gà`);
   if(kind==="sold1")return bulkWrite(ids,U({gaSold:true}),`Đã đánh dấu ${ids.length} gà đã bán`);
-  if(kind==="restrict")return bulkWrite(ids,U({channelStatus:"limited"}),`Đã đánh dấu ${ids.length} mail bị hạn chế`);
+  if(kind==="restrict")return bulkWrite(ids,(b,id)=>{const a=accById(id);const data={channelStatus:"limited",updatedAt:Date.now()};if(stageOf(a)==="working")data.stage="none";b.update(doc(db,"accounts",id),data)},`Đã đánh dấu ${ids.length} mail bị hạn chế (gỡ khỏi đang làm)`);
   if(kind==="home"||kind==="company")return bulkWrite(ids,U({location:kind}),`Đã chuyển ${ids.length} mail sang ${LOCATION[kind][0]}`);
   if(kind.startsWith("st:")){const st=kind.slice(3);return bulkWrite(ids,U({stage:st}),`Đã chuyển ${ids.length} mail sang ${STAGE[st][0]}`)}
   if(kind==="phone")return bulkWrite(ids,U({phoneDate:Date.now()}),`Đã gia hạn SĐT ${ids.length} mail (+90 ngày)`);
