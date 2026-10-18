@@ -504,7 +504,7 @@ function renderInner(){
     rows.sort((x,y)=>(x.gaSold?1:0)-(y.gaSold?1:0)||(x.email||"").localeCompare(y.email||""));
     if(!gaList.length){box.innerHTML=`<div class="empty"><b>Chưa có mail ở mục Gà</b><span>Mở một mail đủ điều kiện và đổi "Giai đoạn" sang <b>Tạo gà</b> — nó sẽ chuyển sang đây.</span></div>`;return}
     if(!rows.length){box.innerHTML=`<div class="empty">Không có gà nào khớp bộ lọc.</div>`;return}
-    S.lastAccIds=[];
+    S.lastAccIds=rows.map(x=>x.id);
     box.innerHTML=gaTable(rows);
   }else{
     if(!S.loaded.i){box.innerHTML=`<div class="empty">Đang tải…</div>`;return}
@@ -549,7 +549,8 @@ function accTable(rows){
     </tr>`}).join("")}</tbody></table>`;
 }
 function gaTable(rows){
-  return `<table><thead><tr><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Kênh</th><th>Duyệt</th><th>Trạng thái gà</th><th>Xác minh / Kiếm tiền</th></tr></thead><tbody>${rows.map(x=>`<tr data-acc="${x.id}">
+  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Kênh</th><th>Duyệt</th><th>Trạng thái gà</th><th>Xác minh / Kiếm tiền</th></tr></thead><tbody>${rows.map(x=>`<tr data-acc="${x.id}" class="${S.sel.has(x.id)?"picked":""}">
+      <td class="selcol"><input type="checkbox" class="rowck" data-id="${x.id}" ${S.sel.has(x.id)?"checked":""}></td>
       <td class="mono"><span class="cpmail" data-email="${esc(x.email)}" title="Bấm để copy email">${esc(x.email)}</span></td>
       <td>${pill(LOCATION,locOf(x))}</td>
       <td>${esc(x.staff)||'<span class="small">—</span>'}</td>
@@ -715,9 +716,9 @@ function toggleAll(on){(S.lastAccIds||[]).forEach(id=>on?S.sel.add(id):S.sel.del
 function syncSelAll(){const ids=S.lastAccIds||[],el=$("selAll");if(!el)return;const all=ids.length>0&&ids.every(id=>S.sel.has(id));el.checked=all;el.indeterminate=!all&&ids.some(id=>S.sel.has(id))}
 function renderBulk(){
   const bar=$("bulkbar"),n=S.sel.size;syncSelAll();
-  if(!n||S.tab!=="acc"){bar.hidden=true;bar.innerHTML="";return}
+  if(!n||(S.tab!=="acc"&&S.tab!=="ga")){bar.hidden=true;bar.innerHTML="";return}
   bar.hidden=false;
-  bar.innerHTML=`<span class="cnt2">Đã chọn ${n}</span>
+  const acc=`
     <button class="mini" data-b="home">→ 🏠 Nhà</button>
     <button class="mini" data-b="company">→ 🏢 Cty</button>
     <button class="mini" data-b="st:working">→ Đang làm</button>
@@ -727,7 +728,16 @@ function renderBulk(){
     <button class="mini" data-b="phone">Gia hạn SĐT</button>
     <button class="mini" data-b="chg1">✓ Đã đổi TT</button>
     <button class="mini" data-b="chg0">Chưa đổi TT</button>
-    <button class="mini" data-b="staff">Gán nhân viên…</button>
+    <button class="mini" data-b="staff">Gán nhân viên…</button>`;
+  const ga=`
+    <button class="mini" data-b="rev:approved">✅ Đã duyệt</button>
+    <button class="mini" data-b="rev:waiting">⏳ Đợi duyệt</button>
+    <button class="mini" data-b="diss1">💀 Bị diss</button>
+    <button class="mini" data-b="diss0">Bỏ diss</button>
+    <button class="mini" data-b="sold1">Đã bán</button>
+    <button class="mini" data-b="st:working">↩ Về Đang làm</button>
+    <button class="mini" data-b="staff">Gán nhân viên…</button>`;
+  bar.innerHTML=`<span class="cnt2">Đã chọn ${n}</span>${S.tab==="ga"?ga:acc}
     <button class="mini" data-b="copy">📋 Copy email</button>
     <button class="mini danger" data-b="del">Xóa</button>
     <button class="mini ghost" data-b="clear">Bỏ chọn</button>`;
@@ -749,6 +759,10 @@ function bulkAction(kind){
     return;
   }
   const U=(data)=>(b,id)=>b.update(doc(db,"accounts",id),{...data,updatedAt:Date.now()});
+  if(kind.startsWith("rev:")){const r=kind.slice(4);return bulkWrite(ids,U({gaReview:r}),`Đã đặt ${ids.length} gà: ${GAREVIEW[r][0]}`)}
+  if(kind==="diss1")return bulkWrite(ids,U({gaDissed:true}),`Đã đánh dấu ${ids.length} gà bị diss`);
+  if(kind==="diss0")return bulkWrite(ids,U({gaDissed:false}),`Đã bỏ diss ${ids.length} gà`);
+  if(kind==="sold1")return bulkWrite(ids,U({gaSold:true}),`Đã đánh dấu ${ids.length} gà đã bán`);
   if(kind==="restrict")return bulkWrite(ids,U({channelStatus:"limited"}),`Đã đánh dấu ${ids.length} mail bị hạn chế`);
   if(kind==="home"||kind==="company")return bulkWrite(ids,U({location:kind}),`Đã chuyển ${ids.length} mail sang ${LOCATION[kind][0]}`);
   if(kind.startsWith("st:")){const st=kind.slice(3);return bulkWrite(ids,U({stage:st}),`Đã chuyển ${ids.length} mail sang ${STAGE[st][0]}`)}
