@@ -323,6 +323,7 @@ const stageOf=a=>STAGE[a.stage]?a.stage:"none";
 const appealOf=a=>APPEAL[a.appeal]?a.appeal:"none";
 const isGa=a=>stageOf(a)==="ga";
 const reviewOf=a=>a.gaReview==="approved"?"approved":"waiting";
+const gaDone=a=>a.gaCreated===true||reviewOf(a)==="approved"; // đã tạo gà (đã duyệt cũng coi như đã tạo)
 const restricted=a=>a.restricted===true||a.channelStatus==="limited"; // gồm cả dữ liệu cũ
 const isWorking=a=>stageOf(a)==="working"&&!restricted(a);  // bị hạn chế thì không tính đang làm
 const isRedo=a=>stageOf(a)==="redo";
@@ -502,8 +503,8 @@ function renderInner(){
       if(S.status==="ga_wait"&&reviewOf(x)!=="waiting")return false;
       if(S.status==="ga_approved"&&reviewOf(x)!=="approved")return false;
       if(S.status==="ga_dissed"&&!x.gaDissed)return false;
-      if(S.status==="ga_created"&&!x.gaCreated)return false;
-      if(S.status==="ga_candidate"&&x.gaCreated)return false;
+      if(S.status==="ga_created"&&!gaDone(x))return false;
+      if(S.status==="ga_candidate"&&gaDone(x))return false;
       if(q&&![x.email,x.staff,x.channelName,x.gaLinkedTo,x.note].join(" ").toLowerCase().includes(q))return false;
       return true;});
     rows.sort((x,y)=>(x.gaSold?1:0)-(y.gaSold?1:0)||(x.email||"").localeCompare(y.email||""));
@@ -567,7 +568,7 @@ function gaTable(rows){
       <td>${esc(x.staff)||'<span class="small">—</span>'}</td>
       <td>${secCell(x)}</td>
       <td class="chan">${linkCell(x.channelUrl)}</td>
-      <td>${x.gaCreated?'<span class="pill t-ok">✅ Đã tạo gà</span>':'<span class="pill t-warn">⏳ Đợi đủ ĐK</span>'}</td>
+      <td>${gaDone(x)?'<span class="pill t-ok">✅ Đã tạo gà</span>':'<span class="pill t-warn">⏳ Đợi đủ ĐK</span>'}</td>
       <td>${x.gaDissed?'<span class="pill t-bad">💀 Bị diss</span>':pill(GAREVIEW,reviewOf(x))}</td>
       <td>${x.gaSold?'<span class="pill t-ok">Đã bán</span>':'<span class="pill t-warn">Đang giữ</span>'}${x.gaLinkedTo?`<div class="small">Nối: ${esc(x.gaLinkedTo)}</div>`:""}</td>
       <td><div class="flags">${flagChip(x.idVerified,"Danh tính")}${flagChip(x.taxAdded,"Thuế")}${flagChip(x.bankAdded,"Bank")}${flagChip(x.monetized,"Kiếm tiền")}</div></td>
