@@ -323,7 +323,7 @@ const isGa=a=>stageOf(a)==="ga";
 const reviewOf=a=>a.gaReview==="approved"?"approved":"waiting";
 const isWorking=a=>stageOf(a)==="working"&&a.channelStatus!=="limited";  // bị hạn chế thì không tính đang làm
 const isRedo=a=>stageOf(a)==="redo";
-const isLive=a=>a.accountStatus!=="locked"&&a.accountStatus!=="retired";
+const isLive=a=>a.accountStatus!=="locked"&&a.accountStatus!=="retired"&&a.channelStatus!=="limited";
 const hasProblem=a=>a.accountStatus==="locked"||a.accountStatus==="verify"||["strike","demonetized","limited","terminated"].includes(a.channelStatus);
 const restricted=a=>a.channelStatus==="limited";
 const notChanged=a=>a.infoChanged!==true;
