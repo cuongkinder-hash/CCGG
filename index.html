@@ -540,10 +540,11 @@ function phoneChip(x){const d=phoneDaysLeft(x);if(d<=0)return `<span class="mchi
 function stageCell(x){let h=stageOf(x)!=="none"?pill(STAGE,stageOf(x)):'<span class="small">—</span>';if(appealOf(x)!=="none")h+=`<div class="small" style="margin-top:3px">${pill(APPEAL,appealOf(x))}</div>`;if(needAppealCheck(x))h+=`<div class="small" style="margin-top:3px"><span class="mchip" style="color:var(--bad);background:var(--bad-bg)">⏰ Check kháng</span></div>`;return h}
 function flagChip(on,label){return `<span class="fchip ${on?"":"off"}">${on?"✓":"✗"} ${label}</span>`}
 function secBtn(a,field,label){const on=hasVal(a[field]);return on?`<button class="mini" data-cpf="${field}" data-cid="${a.id}" title="Bấm để copy ${label}">${label}</button>`:`<button class="mini ghost" disabled title="Chưa có ${label}">${label} ✗</button>`}
-function secCell(a){return `<div class="flags">${secBtn(a,"password","MK")}${secBtn(a,"recovery","KP")}${secBtn(a,"phone","SĐT")}${secBtn(a,"twofaRecovery","2FA")}</div>`}
+const linkBtn=(u,label)=>u?`<a href="${esc(u)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:3px;border:1px solid var(--line);border-radius:8px;padding:4px 9px;font-size:12px;font-weight:600;text-decoration:none;color:var(--accent)">${label} ↗</a>`:`<button class="mini ghost" disabled title="Chưa có ${label}">${label} ✗</button>`;
+function secCell(a){return `<div class="flags">${secBtn(a,"password","MK")}${secBtn(a,"phone","SĐT")}${secBtn(a,"twofaRecovery","2FA")}${linkBtn(a.phoneLink,"Link SĐT")}</div>`}
 const linkCell=u=>u?`<a href="${esc(u)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Mở ↗</a>`:'<span class="small">—</span>';
 function accTable(rows){
-  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Bảo mật (bấm copy)</th><th>Link SĐT</th><th>Kênh BKT</th><th>Hạn SĐT</th><th>Giai đoạn</th><th>Trạng thái</th><th>Đổi TT</th><th>Thiếu</th><th>SC</th></tr></thead><tbody>${rows.map(x=>{
+  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Bảo mật (bấm copy)</th><th>Kênh BKT</th><th>Hạn SĐT</th><th>Giai đoạn</th><th>Trạng thái</th><th>Đổi TT</th><th>Thiếu</th><th>SC</th></tr></thead><tbody>${rows.map(x=>{
     const miss=missingOf(x);const c=openCount(x.id);
     return `<tr data-acc="${x.id}" class="${S.sel.has(x.id)?"picked":""}">
       <td class="selcol"><input type="checkbox" class="rowck" data-id="${x.id}" ${S.sel.has(x.id)?"checked":""}></td>
@@ -551,7 +552,6 @@ function accTable(rows){
       <td>${pill(LOCATION,locOf(x))}</td>
       <td>${esc(x.staff)||'<span class="small">—</span>'}</td>
       <td>${secCell(x)}</td>
-      <td>${linkCell(x.phoneLink)}</td>
       <td class="chan">${linkCell(x.channelUrl)}</td>
       <td>${phoneChip(x)}</td>
       <td>${stageCell(x)}</td>
