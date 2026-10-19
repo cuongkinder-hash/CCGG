@@ -95,6 +95,7 @@ tr:last-child td{border-bottom:none}
 tbody tr{cursor:pointer} tbody tr:hover td{background:var(--soft)}
 .mono{font-family:var(--f-mono);font-size:12.5px;word-break:break-all}
 .cpmail{cursor:pointer;border-radius:4px;padding:1px 2px}
+.tgchip{cursor:pointer}.tgchip:hover{filter:brightness(.95)}
 .cpmail:hover{text-decoration:underline dotted;background:var(--soft)}
 .small{font-size:12px;color:var(--muted)}
 .chan a{color:var(--accent);text-decoration:none} .chan a:hover{text-decoration:underline}
@@ -314,8 +315,7 @@ function missingOf(a){
   if(!hasVal(a.password))m.push("Mật khẩu");
   if(!hasVal(a.recovery))m.push("Mail KP");
   if(!hasVal(a.phone))m.push("SĐT");
-  if(a.twofaStatus!=="on")m.push("2FA");
-  else if(!hasVal(a.twofaRecovery))m.push("Mã 2FA");
+  if(!hasVal(a.twofaRecovery))m.push("2FA");
   return m;
 }
 const locOf=a=>a.location==="company"?"company":"home";              // mặc định: Nhà
@@ -323,11 +323,12 @@ const stageOf=a=>STAGE[a.stage]?a.stage:"none";
 const appealOf=a=>APPEAL[a.appeal]?a.appeal:"none";
 const isGa=a=>stageOf(a)==="ga";
 const reviewOf=a=>a.gaReview==="approved"?"approved":"waiting";
-const isWorking=a=>stageOf(a)==="working"&&a.channelStatus!=="limited";  // bị hạn chế thì không tính đang làm
+const restricted=a=>a.restricted===true||a.channelStatus==="limited"; // gồm cả dữ liệu cũ
+const isWorking=a=>stageOf(a)==="working"&&!restricted(a);  // bị hạn chế thì không tính đang làm
 const isRedo=a=>stageOf(a)==="redo";
-const isLive=a=>a.accountStatus!=="locked"&&a.accountStatus!=="retired"&&a.channelStatus!=="limited";
-const hasProblem=a=>a.accountStatus==="locked"||a.accountStatus==="verify"||["strike","demonetized","limited","terminated"].includes(a.channelStatus);
-const restricted=a=>a.channelStatus==="limited";
+const isLive=a=>!restricted(a);  // mặc định live, trừ khi bị hạn chế (gà ở tab riêng)
+const hasProblem=a=>restricted(a);
+const has2fa=a=>hasVal(a.twofaRecovery);
 const notChanged=a=>a.infoChanged!==true;
 const phoneBase=a=>a.phoneDate||a.createdAt||Date.now();
 const phoneDaysLeft=a=>Math.ceil((phoneBase(a)+PHONE_DAYS*DAY-Date.now())/DAY);
@@ -536,29 +537,36 @@ const fmt=t=>t?new Date(t).toLocaleString("vi-VN",{day:"2-digit",month:"2-digit"
 function phoneChip(x){const d=phoneDaysLeft(x);if(d<=0)return `<span class="mchip">Hết hạn ${-d}d</span>`;if(d<=PHONE_WARN)return `<span class="mchip" style="color:var(--warn);background:var(--warn-bg)">Còn ${d}d</span>`;return `<span class="small">Còn ${d}d</span>`}
 function stageCell(x){let h=stageOf(x)!=="none"?pill(STAGE,stageOf(x)):'<span class="small">—</span>';if(appealOf(x)!=="none")h+=`<div class="small" style="margin-top:3px">${pill(APPEAL,appealOf(x))}</div>`;if(needAppealCheck(x))h+=`<div class="small" style="margin-top:3px"><span class="mchip" style="color:var(--bad);background:var(--bad-bg)">⏰ Check kháng</span></div>`;return h}
 function flagChip(on,label){return `<span class="fchip ${on?"":"off"}">${on?"✓":"✗"} ${label}</span>`}
+function secBtn(a,field,label){const on=hasVal(a[field]);return on?`<button class="mini" data-cpf="${field}" data-cid="${a.id}" title="Bấm để copy ${label}">${label}</button>`:`<button class="mini ghost" disabled title="Chưa có ${label}">${label} ✗</button>`}
+function secCell(a){return `<div class="flags">${secBtn(a,"password","MK")}${secBtn(a,"recovery","KP")}${secBtn(a,"phone","SĐT")}${secBtn(a,"twofaRecovery","2FA")}</div>`}
+const linkCell=u=>u?`<a href="${esc(u)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Mở ↗</a>`:'<span class="small">—</span>';
 function accTable(rows){
-  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Kênh</th><th>TT kênh</th><th>Giai đoạn</th><th>SĐT</th><th>Thiếu / Đổi TT</th><th>Sự cố</th></tr></thead><tbody>${rows.map(x=>{
+  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Bảo mật (bấm copy)</th><th>Link SĐT</th><th>Kênh BKT</th><th>Hạn SĐT</th><th>Giai đoạn</th><th>Trạng thái</th><th>Đổi TT</th><th>Thiếu</th><th>SC</th></tr></thead><tbody>${rows.map(x=>{
     const miss=missingOf(x);const c=openCount(x.id);
     return `<tr data-acc="${x.id}" class="${S.sel.has(x.id)?"picked":""}">
-      <td class="selcol"><input type="checkbox" class="rowck" data-id="${x.id}" ${S.sel.has(x.id)?"checked":""}></td>
-      <td class="mono"><span class="cpmail" data-email="${esc(x.email)}" title="Bấm để copy email">${esc(x.email)}</span><div class="small">${pill(ACC_STATUS,x.accountStatus)}</div></td>
-      <td>${pill(LOCATION,locOf(x))}</td>
-      <td>${esc(x.staff)||'<span class="small">—</span>'}</td>
-      <td class="chan">${x.channelName?esc(x.channelName):'<span class="small">—</span>'}${x.channelUrl?`<div class="small"><a href="${esc(x.channelUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Mở ↗</a></div>`:""}</td>
-      <td>${pill(CH_STATUS,x.channelStatus)}</td>
-      <td>${stageCell(x)}</td>
-      <td>${phoneChip(x)}</td>
-      <td><div class="miss">${miss.length?miss.map(m=>`<span class="mchip">${m}</span>`).join(""):'<span class="full">Đủ ✓</span>'}${notChanged(x)?'<span class="mchip" style="color:var(--warn);background:var(--warn-bg)">Chưa đổi TT</span>':""}</div></td>
-      <td>${c?`<span class="cnt">${c}</span>`:'<span class="small">0</span>'}</td>
-    </tr>`}).join("")}</tbody></table>`;
-}
-function gaTable(rows){
-  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Kênh</th><th>Tạo gà</th><th>Duyệt</th><th>Trạng thái gà</th><th>Xác minh / Kiếm tiền</th></tr></thead><tbody>${rows.map(x=>`<tr data-acc="${x.id}" class="${S.sel.has(x.id)?"picked":""}">
       <td class="selcol"><input type="checkbox" class="rowck" data-id="${x.id}" ${S.sel.has(x.id)?"checked":""}></td>
       <td class="mono"><span class="cpmail" data-email="${esc(x.email)}" title="Bấm để copy email">${esc(x.email)}</span></td>
       <td>${pill(LOCATION,locOf(x))}</td>
       <td>${esc(x.staff)||'<span class="small">—</span>'}</td>
-      <td class="chan">${x.channelName?esc(x.channelName):'<span class="small">—</span>'}${x.channelUrl?`<div class="small"><a href="${esc(x.channelUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Mở ↗</a></div>`:""}</td>
+      <td>${secCell(x)}</td>
+      <td>${linkCell(x.phoneLink)}</td>
+      <td class="chan">${linkCell(x.channelUrl)}</td>
+      <td>${phoneChip(x)}</td>
+      <td>${stageCell(x)}</td>
+      <td><span class="pill ${restricted(x)?"t-bad":"t-ok"} tgchip" data-tg="restricted" data-id="${x.id}" title="Bấm để đổi">${restricted(x)?"Bị hạn chế":"Đang live"}</span></td>
+      <td><span class="pill ${notChanged(x)?"t-warn":"t-ok"} tgchip" data-tg="infoChanged" data-id="${x.id}" title="Bấm để đổi">${notChanged(x)?"Chưa đổi":"Đã đổi"}</span></td>
+      <td>${miss.length?`<div class="miss">${miss.map(m=>`<span class="mchip">${m}</span>`).join("")}</div>`:'<span class="full">Đủ ✓</span>'}</td>
+      <td>${c?`<span class="cnt">${c}</span>`:'<span class="small">0</span>'}</td>
+    </tr>`}).join("")}</tbody></table>`;
+}
+function gaTable(rows){
+  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Bảo mật</th><th>Kênh BKT</th><th>Tạo gà</th><th>Duyệt</th><th>Trạng thái gà</th><th>Xác minh / Kiếm tiền</th></tr></thead><tbody>${rows.map(x=>`<tr data-acc="${x.id}" class="${S.sel.has(x.id)?"picked":""}">
+      <td class="selcol"><input type="checkbox" class="rowck" data-id="${x.id}" ${S.sel.has(x.id)?"checked":""}></td>
+      <td class="mono"><span class="cpmail" data-email="${esc(x.email)}" title="Bấm để copy email">${esc(x.email)}</span></td>
+      <td>${pill(LOCATION,locOf(x))}</td>
+      <td>${esc(x.staff)||'<span class="small">—</span>'}</td>
+      <td>${secCell(x)}</td>
+      <td class="chan">${linkCell(x.channelUrl)}</td>
       <td>${x.gaCreated?'<span class="pill t-ok">✅ Đã tạo gà</span>':'<span class="pill t-warn">⏳ Đợi đủ ĐK</span>'}</td>
       <td>${x.gaDissed?'<span class="pill t-bad">💀 Bị diss</span>':pill(GAREVIEW,reviewOf(x))}</td>
       <td>${x.gaSold?'<span class="pill t-ok">Đã bán</span>':'<span class="pill t-warn">Đang giữ</span>'}${x.gaLinkedTo?`<div class="small">Nối: ${esc(x.gaLinkedTo)}</div>`:""}</td>
@@ -592,16 +600,10 @@ function openAccount(id){
     <div class="field"><label for="fPw">Mật khẩu</label><div class="pwwrap"><input id="fPw" type="password" placeholder="${id&&hasVal(x.password)?"(giữ nguyên nếu để trống)":""}"><button type="button" data-peek="fPw">Hiện</button></div></div>
     <div class="field"><label for="fRec">Mail / SĐT khôi phục</label><input id="fRec" type="password" placeholder="${id&&hasVal(x.recovery)?"(giữ nguyên nếu để trống)":""}"></div>
     <div class="field"><label for="fPhone">Số điện thoại</label><input id="fPhone" type="password" placeholder="${id&&hasVal(x.phone)?"(giữ nguyên nếu để trống)":""}"></div>
-    <div class="row2">
-      <div class="field"><label for="fTfa">2FA</label><select id="fTfa">${opt(TFA,x.twofaStatus==="on"?"on":"off")}</select></div>
-      <div class="field"><label for="fAccSt">Trạng thái email</label><select id="fAccSt">${opt(ACC_STATUS,x.accountStatus)}</select></div>
-    </div>
-    <div class="field"><label for="fTfaRec">Mã khôi phục 2FA</label><textarea id="fTfaRec" placeholder="${id&&hasVal(x.twofaRecovery)?"(giữ nguyên nếu để trống)":"Dán các mã dự phòng, mỗi mã một dòng"}"></textarea></div>
-    <div class="row2">
-      <div class="field"><label for="fChName">Tên kênh YouTube</label><input id="fChName" value="${esc(x.channelName)}"></div>
-      <div class="field"><label for="fChSt">Tình trạng kênh</label><select id="fChSt">${opt(CH_STATUS,x.channelStatus||"none")}</select></div>
-    </div>
-    <div class="field"><label for="fChUrl">Link kênh</label><input id="fChUrl" type="url" value="${esc(x.channelUrl)}" placeholder="https://www.youtube.com/@..."></div>
+    <div class="field"><label for="fPhoneLink">Link SĐT (trang quản lý/thuê số)</label><input id="fPhoneLink" type="url" value="${esc(x.phoneLink)}" placeholder="https://..."></div>
+    <div class="field"><label for="fTfaRec">Mã khôi phục 2FA <span class="hint">(có mã = coi như đã bật 2FA)</span></label><textarea id="fTfaRec" placeholder="${id&&hasVal(x.twofaRecovery)?"(giữ nguyên nếu để trống)":"Dán các mã dự phòng, mỗi mã một dòng"}"></textarea></div>
+    <div class="field"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="fRestrict" ${restricted(x)?"checked":""} style="width:auto"> Mail/kênh đang bị hạn chế</label></div>
+    <div class="field"><label for="fChUrl">Kênh đang BKT (link kênh bật kiếm tiền)</label><input id="fChUrl" type="url" value="${esc(x.channelUrl)}" placeholder="https://www.youtube.com/@..."></div>
     <div class="grp"><div class="gt">Giai đoạn nuôi kênh</div>
       <div class="row2">
         <div class="field"><label for="fStage">Giai đoạn</label><select id="fStage">${opt(STAGE,stageOf(x))}</select></div>
@@ -619,7 +621,7 @@ function openAccount(id){
       <button type="button" class="mini" id="fPhoneNow">Gia hạn hôm nay (+90 ngày)</button>
     </div>
     <div class="field"><label for="fAppeal">Tình trạng kháng (khi bị hạn chế)</label><select id="fAppeal">${opt(APPEAL,appealOf(x))}</select>${needAppealCheck(x)?'<span class="hint" style="color:var(--bad)">⏰ Đã kháng hơn 2 ngày — nên vào check kết quả.</span>':'<span class="hint">Chọn "Đã kháng chờ KQ"; sau 2 ngày app sẽ nhắc vào check.</span>'}</div>
-    <div class="grp"><div class="gt">Xác minh · kiếm tiền · gà</div>
+    <div class="grp" id="gaGroup" ${stageOf(x)==="ga"?"":"hidden"}><div class="gt">Xác minh · kiếm tiền · gà (chỉ dùng cho gà)</div>
       <div class="field"><label for="fReview">Trạng thái duyệt (gà)</label><select id="fReview">${opt(GAREVIEW,reviewOf(x))}</select></div>
       <div class="cbs">
         ${cb("fCreated",x.gaCreated,"✅ Đã bấm tạo gà (nếu chưa = đang đợi đủ điều kiện)")}
@@ -638,6 +640,7 @@ function openAccount(id){
   `,`${id?`<button class="danger left" id="bDel">Xóa</button><button id="bInc">Báo sự cố</button>`:""}<button type="button" id="bCancel">Hủy</button><button class="primary" id="bSave">${id?"Lưu":"Thêm"}</button>`);
   $("bCancel").onclick=closeSheet;
   $("fPhoneNow").onclick=()=>{$("fPhoneDate").value=dinput(Date.now())};
+  $("fStage").onchange=()=>{$("gaGroup").hidden=$("fStage").value!=="ga"};
   if(id){
     const secrets={rPw:x.password,rRec:x.recovery,rPhone:x.phone,rTfa:x.twofaRecovery};
     $("sheetHost").querySelectorAll("[data-rev]").forEach(b=>b.onclick=async()=>{
@@ -660,8 +663,9 @@ function openAccount(id){
       const keep=(inp,old)=>$(inp).value?encField($(inp).value):Promise.resolve(id?(old||""):"");
       const appealVal=$("fAppeal").value;
       const appealedAt=appealVal==="appealed"?((appealOf(x)==="appealed"&&x.appealedAt)?x.appealedAt:Date.now()):null;
-      const d={email,staff:$("fStaffIn").value.trim(),location:$("fLoc").value,infoChanged:$("fChg").checked,twofaStatus:$("fTfa").value,accountStatus:$("fAccSt").value,
-        channelName:$("fChName").value.trim(),channelStatus:$("fChSt").value,channelUrl:$("fChUrl").value.trim(),note:$("fNote").value.trim(),
+      const restrictVal=$("fRestrict").checked;
+      const d={email,staff:$("fStaffIn").value.trim(),location:$("fLoc").value,infoChanged:$("fChg").checked,
+        restricted:restrictVal,channelStatus:restrictVal?"limited":"normal",channelUrl:$("fChUrl").value.trim(),phoneLink:$("fPhoneLink").value.trim(),note:$("fNote").value.trim(),
         stage:$("fStage").value,workStartDate:dparse($("fWork").value),purchaseDate:dparse($("fBuyDate").value),purchaseSource:$("fBuySrc").value.trim(),
         phoneDate:dparse($("fPhoneDate").value)||x.phoneDate||Date.now(),appeal:appealVal,appealedAt,
         idVerified:$("fIdV").checked,taxAdded:$("fTax").checked,bankAdded:$("fBank").checked,monetized:$("fMon").checked,gaSold:$("fSold").checked,gaDissed:$("fDiss").checked,gaCreated:$("fCreated").checked,gaLinkedTo:$("fLinked").value.trim(),gaReview:$("fReview").value,
@@ -699,7 +703,7 @@ function openIncident(id,accId){
     $("bSave").disabled=true;
     try{
       await setDoc(doc(db,"incidents",crypto.randomUUID()),{...d,status:"open",createdAt:Date.now(),resolvedAt:null});
-      if($("iSync")?.checked){const map={copyright:["channelStatus","strike"],guidelines:["channelStatus","strike"],monetization:["channelStatus","demonetized"],hacked:["accountStatus","locked"],access:["accountStatus","locked"],login:["accountStatus","verify"]};const m=map[d.type];if(m)try{await updateDoc(doc(db,"accounts",d.accountId),{[m[0]]:m[1],updatedAt:Date.now()})}catch(e){}}
+      if($("iSync")?.checked){try{const ac=accById(d.accountId);const upd={restricted:true,channelStatus:"limited",updatedAt:Date.now()};if(ac&&stageOf(ac)==="working")upd.stage="none";await updateDoc(doc(db,"accounts",d.accountId),upd)}catch(e){}}
       closeSheet();toast("Đã ghi sự cố");
     }catch(e){$("ferr").textContent="Lỗi: "+(e.code||e.message);$("bSave").disabled=false}
   };
@@ -773,7 +777,7 @@ function bulkAction(kind){
   if(kind==="diss1")return bulkWrite(ids,U({gaDissed:true}),`Đã đánh dấu ${ids.length} gà bị diss`);
   if(kind==="diss0")return bulkWrite(ids,U({gaDissed:false}),`Đã bỏ diss ${ids.length} gà`);
   if(kind==="sold1")return bulkWrite(ids,U({gaSold:true}),`Đã đánh dấu ${ids.length} gà đã bán`);
-  if(kind==="restrict")return bulkWrite(ids,(b,id)=>{const a=accById(id);const data={channelStatus:"limited",updatedAt:Date.now()};if(stageOf(a)==="working")data.stage="none";b.update(doc(db,"accounts",id),data)},`Đã đánh dấu ${ids.length} mail bị hạn chế (gỡ khỏi đang làm)`);
+  if(kind==="restrict")return bulkWrite(ids,(b,id)=>{const a=accById(id);const data={restricted:true,channelStatus:"limited",updatedAt:Date.now()};if(stageOf(a)==="working")data.stage="none";b.update(doc(db,"accounts",id),data)},`Đã đánh dấu ${ids.length} mail bị hạn chế (gỡ khỏi đang làm)`);
   if(kind==="home"||kind==="company")return bulkWrite(ids,U({location:kind}),`Đã chuyển ${ids.length} mail sang ${LOCATION[kind][0]}`);
   if(kind.startsWith("st:")){const st=kind.slice(3);return bulkWrite(ids,U({stage:st}),`Đã chuyển ${ids.length} mail sang ${STAGE[st][0]}`)}
   if(kind==="phone")return bulkWrite(ids,U({phoneDate:Date.now()}),`Đã gia hạn SĐT ${ids.length} mail (+90 ngày)`);
@@ -893,7 +897,7 @@ kenh03@gmail.com"></textarea></div>
         existing.add(email);if(phh)existPhone.set(phh,email);if(thh)exist2fa.set(thh,email);
         const d={email,staff:g("staff"),channelName:g("channelName"),channelUrl:g("channelUrl"),note:g("note"),
           location:locFromText(g("location"))||defLoc,infoChanged:false,
-          accountStatus:"active",channelStatus:g("channelName")?"normal":"none",
+          restricted:false,phoneLink:"",channelStatus:"normal",
           stage:"none",appeal:"none",appealedAt:null,workStartDate:null,
           purchaseDate:dparse(g("purchaseDate")),purchaseSource:g("purchaseSource"),phoneDate:Date.now(),
           idVerified:false,taxAdded:false,bankAdded:false,monetized:false,gaSold:false,gaDissed:false,gaCreated:false,gaLinkedTo:"",gaReview:"waiting",
@@ -933,17 +937,18 @@ async function exportCsv(){
   if(!S.accounts.length){toast("Chưa có dữ liệu");return}
   const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
   const yn=v=>v?"Có":"";
-  const head=["Email","Nơi quản lý","Nhân viên","Giai đoạn","Mật khẩu","Mail khôi phục","SĐT","SĐT hết hạn","Còn (ngày)","2FA","Mã 2FA","Đã đổi TT","Ngày mua","Nguồn mua","Ngày bắt đầu làm","Trạng thái email","Tình trạng kênh","Tình trạng kháng","Xác minh DT","Thuế","Bank","Kiếm tiền","Duyệt gà","Gà đã bán","Nối vào","Tên kênh","Link kênh","Thiếu","Ghi chú"];
+  const head=["Email","Nơi quản lý","Nhân viên","Giai đoạn","Mật khẩu","Mail khôi phục","SĐT","Link SĐT","SĐT hết hạn","Còn (ngày)","Mã 2FA","Đã đổi TT","Ngày mua","Nguồn mua","Ngày bắt đầu làm","Trạng thái","Tình trạng kháng","Xác minh DT","Thuế","Bank","Kiếm tiền","Duyệt gà","Gà đã bán","Nối vào","Kênh BKT","Thiếu","Ghi chú"];
   const lines=[];
   for(const a of S.accounts){
+    const tt=isGa(a)?"Gà":(restricted(a)?"Bị hạn chế":"Đang live");
     lines.push([a.email,LOCATION[locOf(a)][0].replace(/^..\s/,""),a.staff,STAGE[stageOf(a)][0],
-      await decField(a.password),await decField(a.recovery),await decField(a.phone),
+      await decField(a.password),await decField(a.recovery),await decField(a.phone),a.phoneLink||"",
       dshow(phoneBase(a)+PHONE_DAYS*DAY),phoneDaysLeft(a),
-      a.twofaStatus==="on"?"Đã bật":"Chưa",await decField(a.twofaRecovery),a.infoChanged?"Rồi":"Chưa",
+      await decField(a.twofaRecovery),a.infoChanged?"Rồi":"Chưa",
       a.purchaseDate?dshow(a.purchaseDate):"",a.purchaseSource,a.workStartDate?dshow(a.workStartDate):"",
-      ACC_STATUS[a.accountStatus]?.[0],CH_STATUS[a.channelStatus]?.[0],APPEAL[appealOf(a)][0],
+      tt,APPEAL[appealOf(a)][0],
       yn(a.idVerified),yn(a.taxAdded),yn(a.bankAdded),yn(a.monetized),isGa(a)?GAREVIEW[reviewOf(a)][0]:"",yn(a.gaSold),a.gaLinkedTo,
-      a.channelName,a.channelUrl,missingOf(a).join(" / "),a.note].map(q).join(","));
+      a.channelUrl,missingOf(a).join(" / "),a.note].map(q).join(","));
   }
   const csv="﻿"+[head.map(q).join(","),...lines].join("\r\n");
   downloadFile(`so-mail-${new Date().toISOString().slice(0,10)}.csv`,csv);
@@ -972,8 +977,12 @@ async function copyEmail(em){
   try{await navigator.clipboard.writeText(em);toast("Đã copy: "+em)}
   catch(e){const t=document.createElement("textarea");t.value=em;t.style.position="fixed";t.style.opacity="0";document.body.appendChild(t);t.select();try{document.execCommand("copy");toast("Đã copy: "+em)}catch(_){toast("Không copy được")}t.remove()}
 }
+async function copySecret(id,field){const a=accById(id);if(!a||!hasVal(a[field])){toast("Chưa có");return}const lbl={password:"mật khẩu",recovery:"mail KP",phone:"SĐT",twofaRecovery:"mã 2FA"}[field]||field;const v=await decField(a[field]);try{await navigator.clipboard.writeText(v);toast("Đã copy "+lbl)}catch(e){copyFallback(v,1)}}
+async function toggleField(id,f){const a=accById(id);if(!a)return;const cur=!!a[f];const data={[f]:!cur,updatedAt:Date.now()};if(f==="restricted"){data.channelStatus=!cur?"limited":"normal";if(!cur&&stageOf(a)==="working")data.stage="none"}try{await updateDoc(doc(db,"accounts",id),data)}catch(e){toast("Lỗi: "+(e.code||e.message))}}
 $("list").addEventListener("click",e=>{
   const cm=e.target.closest(".cpmail");if(cm){copyEmail(cm.dataset.email);e.stopPropagation();return}
+  const cp=e.target.closest("[data-cpf]");if(cp){copySecret(cp.dataset.cid,cp.dataset.cpf);e.stopPropagation();return}
+  const tg=e.target.closest("[data-tg]");if(tg){toggleField(tg.dataset.id,tg.dataset.tg);e.stopPropagation();return}
   const ck=e.target.closest("input.rowck");if(ck){toggleSel(ck.dataset.id,ck.checked);e.stopPropagation();return}
   if(e.target.id==="selAll"){toggleAll(e.target.checked);return}
   const tr=e.target.closest("tr[data-acc],tr[data-inc]");if(!tr)return;tr.dataset.acc?openAccount(tr.dataset.acc):openIncident(tr.dataset.inc);
