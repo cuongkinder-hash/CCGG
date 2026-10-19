@@ -214,7 +214,9 @@ code.k{font-family:var(--f-mono);font-size:12px;background:var(--soft);padding:1
 
   <div class="locbar" id="gaBar" hidden>
     <button class="locbtn" data-gf="">Tất cả gà</button>
-    <button class="locbtn" data-gf="ga_wait">⏳ Đang đợi duyệt</button>
+    <button class="locbtn" data-gf="ga_created">✅ Đã tạo gà</button>
+    <button class="locbtn" data-gf="ga_candidate">⏳ Đợi đủ điều kiện</button>
+    <button class="locbtn" data-gf="ga_wait">Đang đợi duyệt</button>
     <button class="locbtn" data-gf="ga_approved">✅ Đã duyệt</button>
     <button class="locbtn" data-gf="ga_money">💰 Đã kiếm tiền</button>
     <button class="locbtn" data-gf="ga_sold">Đã bán</button>
@@ -437,7 +439,7 @@ function renderFilters(){
   $("fStaff").innerHTML=`<option value="">Mọi nhân viên</option>`+staffs.map(s=>`<option ${s===S.staff?"selected":""}>${esc(s)}</option>`).join("");
   let opts;
   if(S.tab==="acc")opts=[["","Tất cả"],["live","Mail đang live"],["working","Đang làm"],["redo","Chuẩn bị làm lại"],["changed_no","Chưa đổi thông tin"],["miss","Thiếu thông tin"],["phone","SĐT sắp hết hạn"],["restricted","Bị hạn chế"],["appeal_check","Cần check kháng"],["problem","Có vấn đề"],["ch:normal","Kênh bình thường"],["ch:strike","Kênh có gậy"],["ch:demonetized","Mất kiếm tiền"],["ch:limited","Kênh bị hạn chế"],["ch:terminated","Kênh bị chấm dứt"],["ac:verify","Email cần xác minh"],["ac:locked","Email bị khóa"]];
-  else if(S.tab==="ga")opts=[["","Tất cả"],["ga_wait","Đang đợi duyệt"],["ga_approved","Đã duyệt"],["ga_hold","Đang giữ"],["ga_sold","Đã bán"],["ga_money","Đã bật kiếm tiền"],["ga_dissed","Bị diss mail"]];
+  else if(S.tab==="ga")opts=[["","Tất cả"],["ga_created","Đã tạo gà"],["ga_candidate","Đợi đủ điều kiện"],["ga_wait","Đang đợi duyệt"],["ga_approved","Đã duyệt"],["ga_hold","Đang giữ"],["ga_sold","Đã bán"],["ga_money","Đã bật kiếm tiền"],["ga_dissed","Bị diss mail"]];
   else opts=[["","Tất cả"],["open","Đang mở"],["resolved","Đã xử lý"]];
   if(!opts.some(o=>o[0]===S.status))S.status="";
   $("fStatus").innerHTML=opts.map(([v,l])=>`<option value="${v}" ${v===S.status?"selected":""}>${l}</option>`).join("");
@@ -499,6 +501,8 @@ function renderInner(){
       if(S.status==="ga_wait"&&reviewOf(x)!=="waiting")return false;
       if(S.status==="ga_approved"&&reviewOf(x)!=="approved")return false;
       if(S.status==="ga_dissed"&&!x.gaDissed)return false;
+      if(S.status==="ga_created"&&!x.gaCreated)return false;
+      if(S.status==="ga_candidate"&&x.gaCreated)return false;
       if(q&&![x.email,x.staff,x.channelName,x.gaLinkedTo,x.note].join(" ").toLowerCase().includes(q))return false;
       return true;});
     rows.sort((x,y)=>(x.gaSold?1:0)-(y.gaSold?1:0)||(x.email||"").localeCompare(y.email||""));
@@ -549,12 +553,13 @@ function accTable(rows){
     </tr>`}).join("")}</tbody></table>`;
 }
 function gaTable(rows){
-  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Kênh</th><th>Duyệt</th><th>Trạng thái gà</th><th>Xác minh / Kiếm tiền</th></tr></thead><tbody>${rows.map(x=>`<tr data-acc="${x.id}" class="${S.sel.has(x.id)?"picked":""}">
+  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>Kênh</th><th>Tạo gà</th><th>Duyệt</th><th>Trạng thái gà</th><th>Xác minh / Kiếm tiền</th></tr></thead><tbody>${rows.map(x=>`<tr data-acc="${x.id}" class="${S.sel.has(x.id)?"picked":""}">
       <td class="selcol"><input type="checkbox" class="rowck" data-id="${x.id}" ${S.sel.has(x.id)?"checked":""}></td>
       <td class="mono"><span class="cpmail" data-email="${esc(x.email)}" title="Bấm để copy email">${esc(x.email)}</span></td>
       <td>${pill(LOCATION,locOf(x))}</td>
       <td>${esc(x.staff)||'<span class="small">—</span>'}</td>
       <td class="chan">${x.channelName?esc(x.channelName):'<span class="small">—</span>'}${x.channelUrl?`<div class="small"><a href="${esc(x.channelUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Mở ↗</a></div>`:""}</td>
+      <td>${x.gaCreated?'<span class="pill t-ok">✅ Đã tạo gà</span>':'<span class="pill t-warn">⏳ Đợi đủ ĐK</span>'}</td>
       <td>${x.gaDissed?'<span class="pill t-bad">💀 Bị diss</span>':pill(GAREVIEW,reviewOf(x))}</td>
       <td>${x.gaSold?'<span class="pill t-ok">Đã bán</span>':'<span class="pill t-warn">Đang giữ</span>'}${x.gaLinkedTo?`<div class="small">Nối: ${esc(x.gaLinkedTo)}</div>`:""}</td>
       <td><div class="flags">${flagChip(x.idVerified,"Danh tính")}${flagChip(x.taxAdded,"Thuế")}${flagChip(x.bankAdded,"Bank")}${flagChip(x.monetized,"Kiếm tiền")}</div></td>
@@ -617,6 +622,7 @@ function openAccount(id){
     <div class="grp"><div class="gt">Xác minh · kiếm tiền · gà</div>
       <div class="field"><label for="fReview">Trạng thái duyệt (gà)</label><select id="fReview">${opt(GAREVIEW,reviewOf(x))}</select></div>
       <div class="cbs">
+        ${cb("fCreated",x.gaCreated,"✅ Đã bấm tạo gà (nếu chưa = đang đợi đủ điều kiện)")}
         ${cb("fIdV",x.idVerified,"Đã xác minh danh tính")}
         ${cb("fTax",x.taxAdded,"Đã thêm thuế")}
         ${cb("fBank",x.bankAdded,"Đã thêm ngân hàng")}
@@ -658,7 +664,7 @@ function openAccount(id){
         channelName:$("fChName").value.trim(),channelStatus:$("fChSt").value,channelUrl:$("fChUrl").value.trim(),note:$("fNote").value.trim(),
         stage:$("fStage").value,workStartDate:dparse($("fWork").value),purchaseDate:dparse($("fBuyDate").value),purchaseSource:$("fBuySrc").value.trim(),
         phoneDate:dparse($("fPhoneDate").value)||x.phoneDate||Date.now(),appeal:appealVal,appealedAt,
-        idVerified:$("fIdV").checked,taxAdded:$("fTax").checked,bankAdded:$("fBank").checked,monetized:$("fMon").checked,gaSold:$("fSold").checked,gaDissed:$("fDiss").checked,gaLinkedTo:$("fLinked").value.trim(),gaReview:$("fReview").value,
+        idVerified:$("fIdV").checked,taxAdded:$("fTax").checked,bankAdded:$("fBank").checked,monetized:$("fMon").checked,gaSold:$("fSold").checked,gaDissed:$("fDiss").checked,gaCreated:$("fCreated").checked,gaLinkedTo:$("fLinked").value.trim(),gaReview:$("fReview").value,
         password:await keep("fPw",x.password),recovery:await keep("fRec",x.recovery),phone:await keep("fPhone",x.phone),
         twofaRecovery:await keep("fTfaRec",x.twofaRecovery),updatedAt:Date.now(),createdAt:x.createdAt||Date.now()};
       // vân tay chống trùng
@@ -730,8 +736,10 @@ function renderBulk(){
     <button class="mini" data-b="chg0">Chưa đổi TT</button>
     <button class="mini" data-b="staff">Gán nhân viên…</button>`;
   const ga=`
-    <button class="mini" data-b="rev:approved">✅ Đã duyệt</button>
-    <button class="mini" data-b="rev:waiting">⏳ Đợi duyệt</button>
+    <button class="mini" data-b="created1">✅ Đã tạo gà</button>
+    <button class="mini" data-b="created0">⏳ Đợi đủ ĐK</button>
+    <button class="mini" data-b="rev:approved">Đã duyệt</button>
+    <button class="mini" data-b="rev:waiting">Đợi duyệt</button>
     <button class="mini" data-b="diss1">💀 Bị diss</button>
     <button class="mini" data-b="diss0">Bỏ diss</button>
     <button class="mini" data-b="sold1">Đã bán</button>
@@ -760,6 +768,8 @@ function bulkAction(kind){
   }
   const U=(data)=>(b,id)=>b.update(doc(db,"accounts",id),{...data,updatedAt:Date.now()});
   if(kind.startsWith("rev:")){const r=kind.slice(4);return bulkWrite(ids,U({gaReview:r}),`Đã đặt ${ids.length} gà: ${GAREVIEW[r][0]}`)}
+  if(kind==="created1")return bulkWrite(ids,U({gaCreated:true}),`Đã đánh dấu ${ids.length} gà: đã tạo gà`);
+  if(kind==="created0")return bulkWrite(ids,U({gaCreated:false}),`Đã đánh dấu ${ids.length} gà: đợi đủ điều kiện`);
   if(kind==="diss1")return bulkWrite(ids,U({gaDissed:true}),`Đã đánh dấu ${ids.length} gà bị diss`);
   if(kind==="diss0")return bulkWrite(ids,U({gaDissed:false}),`Đã bỏ diss ${ids.length} gà`);
   if(kind==="sold1")return bulkWrite(ids,U({gaSold:true}),`Đã đánh dấu ${ids.length} gà đã bán`);
@@ -886,7 +896,7 @@ kenh03@gmail.com"></textarea></div>
           accountStatus:"active",channelStatus:g("channelName")?"normal":"none",
           stage:"none",appeal:"none",appealedAt:null,workStartDate:null,
           purchaseDate:dparse(g("purchaseDate")),purchaseSource:g("purchaseSource"),phoneDate:Date.now(),
-          idVerified:false,taxAdded:false,bankAdded:false,monetized:false,gaSold:false,gaDissed:false,gaLinkedTo:"",gaReview:"waiting",
+          idVerified:false,taxAdded:false,bankAdded:false,monetized:false,gaSold:false,gaDissed:false,gaCreated:false,gaLinkedTo:"",gaReview:"waiting",
           phoneHash:phh,twofaHash:thh,
           twofaStatus:(tfaRec||/^(co|yes|on|bat|x|1|true)$/i.test(stripD(tfaFlag)))?"on":"off",
           password:await encField(g("password")),recovery:await encField(g("recovery")),phone:await encField(phPlain),
