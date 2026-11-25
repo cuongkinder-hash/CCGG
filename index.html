@@ -485,7 +485,7 @@ function makeZip(files){ // files: [{name, text}]
 async function downloadBridge(){
   try{
     const names=["cau_noi.py","Bat-Thanh-Thanh.bat","HUONG-DAN.txt"],files=[];
-    for(const n of names){const r=await fetch("cau-noi/"+n,{cache:"no-store"});if(!r.ok)throw new Error(n+": "+r.status);files.push({name:"thanh-thanh-cau-noi/"+n,text:await r.text()})}
+    for(const n of names){const r=await fetch("cau-noi/"+n,{cache:"no-store"});if(!r.ok)throw new Error(n+": "+r.status);let t=await r.text();if(/\.(bat|txt)$/i.test(n))t=t.replace(/\r?\n/g,"\r\n");files.push({name:"thanh-thanh-cau-noi/"+n,text:t})}
     const url=URL.createObjectURL(makeZip(files));const el=document.createElement("a");el.href=url;el.download="thanh-thanh-cau-noi.zip";document.body.appendChild(el);el.click();el.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
     toast("Đã tải cầu nối — giải nén rồi làm theo HUONG-DAN.txt");
   }catch(e){toast("Không tải được cầu nối: "+e.message)}
