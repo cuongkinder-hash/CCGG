@@ -169,6 +169,7 @@ table.grid td.gstat{padding:0 6px;font-size:11px}
 .mic.on{background:var(--bad);color:#fff;border-color:var(--bad)}
 .avatar img,.ttfab img{width:100%;height:100%;object-fit:cover;border-radius:50%}
 /* Thanh Thanh nổi ở góc */
+.actbox.plan{border-color:var(--accent)}
 .ttfab{position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom,0));width:60px;height:60px;border-radius:50%;border:3px solid var(--panel);padding:0;background:linear-gradient(135deg,#ff9ac2,#b18cff);font-size:30px;display:grid;place-items:center;box-shadow:0 8px 26px rgba(10,12,20,.3);cursor:pointer;z-index:40;transition:transform .15s}
 .ttfab:hover{transform:scale(1.07)}
 .ttfab .dot{position:absolute;top:-3px;right:-3px;min-width:20px;height:20px;padding:0 5px;border-radius:10px;background:var(--bad);color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center;border:2px solid var(--panel)}
@@ -384,6 +385,7 @@ const GAREVIEW={waiting:["⏳ Đợi duyệt","t-warn"],approved:["✅ Đã duy�
 const APPEAL={none:["Không","t-off"],wait_phone:["Đợi add số","t-warn"],wait_appeal:["Đợi kháng","t-warn"],appealed:["Đã kháng chờ KQ","t-warn"]};
 const DAY=86400000, PHONE_DAYS=90, PHONE_WARN=30, PHONE_URGENT=20, APPEAL_CHECK_DAYS=2;
 const PROXY_CAP=40, PROXY_WARN_DAYS=7;
+const PHONE_SHARE_MAX=2; // 1 SĐT được dùng chung tối đa cho 2 mail
 const PROXY_TYPE={http:"HTTP",socks5:"SOCKS5"};
 const VERIFY_CONST="SKM-UNLOCK-OK-v1";
 
@@ -1006,11 +1008,14 @@ function openAccount(id){
       const tfaPlain=$("fTfaRec").value.trim()||(id&&hasVal(x.twofaRecovery)?await decField(x.twofaRecovery):"");
       d.phoneHash=await hashPhone(phonePlain);
       d.twofaHash=await hash2fa(tfaPlain);
-      if(d.phoneHash){for(const a of S.accounts){if(a.id===id)continue;if(await phoneHashOf(a)===d.phoneHash){$("ferr").textContent=`SĐT này đã dùng cho mail: ${a.email}`;$("bSave").disabled=false;return}}}
+      if(d.phoneHash){const same=[];for(const a of S.accounts){if(a.id===id)continue;if(await phoneHashOf(a)===d.phoneHash)same.push(a.email)}
+        if(same.length>=PHONE_SHARE_MAX){$("ferr").textContent=`SĐT này đã dùng cho ${same.length} mail (${same.join(", ")}) — mỗi SĐT tối đa ${PHONE_SHARE_MAX} mail.`;$("bSave").disabled=false;return}
+        if(same.length)d.__share=same.join(", ")}
       if(d.twofaHash){for(const a of S.accounts){if(a.id===id)continue;if(await twofaHashOf(a)===d.twofaHash){$("ferr").textContent=`Mã 2FA này đã dùng cho mail: ${a.email}`;$("bSave").disabled=false;return}}}
       const {id:_drop,...prev}=id?x:{};
+      const share=d.__share;delete d.__share;
       await setDoc(doc(db,"accounts",id||crypto.randomUUID()),{...prev,...d}); // giữ các trường không có trong form (vd tên kênh)
-      closeSheet();toast(id?"Đã lưu":"Đã thêm mail");
+      closeSheet();toast((id?"Đã lưu":"Đã thêm mail")+(share?` · SĐT dùng chung với ${share}`:""));
     }catch(e){$("ferr").textContent="Lưu lỗi: "+(e.code||e.message);$("bSave").disabled=false}
   };
 }
@@ -1148,12 +1153,14 @@ async function scanDuplicates(){
     const th=await twofaHashOf(a);if(th)(by2fa[th]=by2fa[th]||[]).push(a.email);
   }
   const dup=o=>Object.values(o).filter(v=>v.length>1);
-  const de=dup(byEmail),dp=dup(byPhone),dt=dup(by2fa);
+  const de=dup(byEmail),dt=dup(by2fa);
+  const dp=Object.values(byPhone).filter(v=>v.length>PHONE_SHARE_MAX),dpOk=Object.values(byPhone).filter(v=>v.length>1&&v.length<=PHONE_SHARE_MAX);
   const grp=(title,arr,note)=>`<div class="grp"><div class="gt">${title} — ${arr.length} nhóm</div>${arr.length?arr.map(v=>`<div class="imp-prev">${note}<br>${v.map(esc).join("<br>")}</div>`).join(""):'<span class="small">Không có trùng ✓</span>'}</div>`;
   sheet("Quét trùng",`
     <p class="hint">Dò toàn bộ ${S.accounts.length} mail. Các mail cùng một SĐT/2FA được gom nhóm (không hiển thị giá trị để giữ an toàn).</p>
     ${grp("Trùng Email",de,"Cùng một email:")}
-    ${grp("Trùng SĐT",dp,"Các mail dùng chung một SĐT:")}
+    ${grp(`SĐT dùng cho quá ${PHONE_SHARE_MAX} mail`,dp,"Các mail dùng chung một SĐT (vượt mức cho phép):")}
+    <details class="tgrp"><summary><span>SĐT dùng chung ${PHONE_SHARE_MAX} mail (được phép) — ${dpOk.length} cặp</span></summary>${dpOk.map(v=>`<div class="titem" style="cursor:default"><span class="mono small">${v.map(esc).join(" + ")}</span></div>`).join("")||'<span class="small">Không có</span>'}</details>
     ${grp("Trùng mã 2FA",dt,"Các mail dùng chung một mã 2FA:")}
   `,`<button type="button" id="bCancel">Đóng</button>`);
   $("bCancel").onclick=closeSheet;
@@ -1229,8 +1236,8 @@ async function importRows(parsed,defLoc,status=()=>{}){
   const valid=parsed.rows.filter(r=>r[ci.email]&&EMAIL_RE.test(String(r[ci.email]).trim()));
   status("Đang kiểm tra trùng…");
   let added=0,pxNew=0;const skipped=[];
-  const existPhone=new Map(),exist2fa=new Map();
-  for(const a of S.accounts){const ph=await phoneHashOf(a);if(ph)existPhone.set(ph,a.email);const th=await twofaHashOf(a);if(th)exist2fa.set(th,a.email);}
+  const existPhone=new Map(),exist2fa=new Map(); // existPhone: hash -> [email,...]
+  for(const a of S.accounts){const ph=await phoneHashOf(a);if(ph)existPhone.set(ph,[...(existPhone.get(ph)||[]),a.email]);const th=await twofaHashOf(a);if(th)exist2fa.set(th,a.email);}
   status("Đang mã hóa & nhập…");
   const pxByKey=new Map();S.proxies.forEach(p=>{pxByKey.set(String(p.name).toLowerCase(),p.id);if(p.server)pxByKey.set(p.server.toLowerCase(),p.id)});
   let batch=writeBatch(db),n=0,keyNew=0;
@@ -1260,9 +1267,9 @@ async function importRows(parsed,defLoc,status=()=>{}){
       if(existing.has(email)){skipped.push({email,reason:"Trùng email đã có"});continue}
       const tfaFlag=g("twofaFlag");const tfaRec=g("twofaRecovery");const phPlain=g("phone");
       const phh=await hashPhone(phPlain), thh=await hash2fa(tfaRec);
-      if(phh&&existPhone.has(phh)){skipped.push({email,reason:"Trùng SĐT với "+existPhone.get(phh)});continue}
+      if(phh&&(existPhone.get(phh)||[]).length>=PHONE_SHARE_MAX){skipped.push({email,reason:`SĐT đã đủ ${PHONE_SHARE_MAX} mail với `+existPhone.get(phh).join(", ")});continue}
       if(thh&&exist2fa.has(thh)){skipped.push({email,reason:"Trùng mã 2FA với "+exist2fa.get(thh)});continue}
-      existing.add(email);if(phh)existPhone.set(phh,email);if(thh)exist2fa.set(thh,email);
+      existing.add(email);if(phh)existPhone.set(phh,[...(existPhone.get(phh)||[]),email]);if(thh)exist2fa.set(thh,email);
       const isRes=yesText(g("restricted"));
       const d={email,staff:g("staff"),channelName:g("channelName"),channelUrl:g("channelUrl"),note:g("note"),
         location:locFromText(g("location"))||defLoc,infoChanged:yesText(g("infoChanged")),
@@ -1715,87 +1722,249 @@ Nhiệm vụ:
 5. Sự cố / vấn đề gặp phải trong ngày (vd "5 mail bị 403", "proxy P02 chậm") → ghi vào van_de (ngắn gọn, có số lượng/tên).
 6. Sếp hỏi "hôm nay có gì" → tóm tắt Today list (việc dồn từ hôm trước nói trước) + nhắc tự động quan trọng; HỎI sếp có muốn đưa các nhắc tự động lên list không (chỉ thêm khi sếp đồng ý).
 7. Thông tin còn mơ hồ → hỏi lại đúng 1 câu ngắn. Không bịa email, số liệu.
-8. THAO TÁC TRÊN HỆ THỐNG (thao_tac): khi sếp yêu cầu cập nhật trạng thái mail thì TỰ LÀM LUÔN, không cần hỏi lại, rồi báo lại ngắn gọn đã làm gì với bao nhiêu mail. App có nút Hoàn tác nên cứ làm khi yêu cầu rõ.
-   Các loại (loai → gia_tri):
+8. THAO TÁC TRÊN HỆ THỐNG (thao_tac): em có TOÀN QUYỀN đề xuất thay đổi mọi thứ trong app (mail, proxy, key, chủ đề, sự cố; thêm, sửa, xóa).
+   ${TT.ask?'App đang ở chế độ "HỎI TRƯỚC": mọi thao_tac chỉ là ĐỀ XUẤT, app hiện bảng xem trước cho sếp bấm Đồng ý mới làm. Trong tra_loi nói ngắn em định làm gì và nhờ sếp xem rồi bấm "Đồng ý" (hoặc nói "ok làm đi"). KHÔNG nói là đã làm xong.':'App đang ở chế độ "TỰ LÀM": thao_tac được làm ngay (có Hoàn tác). Trong tra_loi báo ngắn đã làm gì.'}
+   - Sếp nhắn đồng ý / ok / làm đi cho ĐỀ XUẤT ĐANG CHỜ DUYỆT → đặt duyet_de_xuat="dong_y" và KHÔNG lặp lại thao_tac đó. Sếp bảo thôi / không / bỏ → duyet_de_xuat="bo_qua". Các trường hợp khác duyet_de_xuat="".
+   Các loại (loai → cách điền):
 ${Object.entries(TT_ACTS).map(([k,v])=>`   - ${k}: ${v.help}`).join("\n")}
+   Trường "truong" (dùng cho sua_mail / sua_proxy / sua_key):
+   - sua_mail: ${Object.entries(TT_MAIL_FIELDS).map(([k,v])=>`${k}=${v[1]}`).join(", ")}
+   - sua_proxy: ${Object.entries(TT_PX_FIELDS).map(([k,v])=>`${k}=${v}`).join(", ")}
+   - sua_key: ${Object.entries(TT_KEY_FIELDS).map(([k,v])=>`${k}=${v}`).join(", ")}
+   - Trường đúng/sai (bool): gia_tri "co" hoặc "khong". Ngày: YYYY-MM-DD. Mỗi mail cần giá trị KHÁC nhau (vd link kênh riêng từng mail) → tách thành nhiều thao tác, mỗi thao tác 1 email.
+   - doi_tuong: tên proxy (vd P01) / "Chủ đề / tên key" / tên chủ đề / mã sự cố (8 ký tự đầu, trong danh sách SỰ CỐ) — tùy loại.
    - Sếp dán danh sách email trong tin nhắn → đặt email_trong_tin_nhan=true (app tự lấy hết email trong tin nhắn đó), và vẫn liệt kê vào emails nếu ít.
    - Sếp nói tắt tên (kenh12) → tìm email khớp trong DANH SÁCH MAIL rồi đưa vào emails.
-   - Một câu có thể sinh nhiều thao tác (vd bị hạn chế + tạo sự cố + kháng "Đợi kháng").
-   - Không rõ là mail nào hoặc yêu cầu có thể nhầm lẫn lớn (> 100 mail, đổi hàng loạt không rõ lý do) → hỏi lại trước, thao_tac để rỗng.
-   - Không có thao tác XÓA mail; sếp muốn xóa thì bảo sếp tự xóa trên bảng.
-   - Đã thao tác rồi thì KHÔNG cần tạo thêm việc trong Today list cho chính thao tác đó (app tự ghi vào nhật ký).
-   Các trường không dùng: gia_tri="" , muc_do="", chi_tiet="".
+   - Một câu có thể sinh nhiều thao tác, theo thứ tự (vd them_key rồi gán key cho mail; them_mail rồi sua_mail).
+   - Yêu cầu mơ hồ, không rõ mail nào, hoặc XÓA mà sếp chưa nói rõ → hỏi lại trước, thao_tac để rỗng. Xóa tối đa 50 mail mỗi lần.
+   - MẬT KHẨU và MÃ 2FA: KHÔNG sửa qua chat (để mật khẩu không gửi qua AI) → bảo sếp mở mail tự nhập.
+   - Đã có thao tác thì KHÔNG cần tạo thêm việc trong Today list cho chính thao tác đó.
+   Các trường không dùng để chuỗi rỗng: doi_tuong="", truong="", gia_tri="", muc_do="", chi_tiet="".
 tra_loi: tiếng Việt tự nhiên, ngắn (thường 1–5 câu); danh sách thì dùng "- " đầu dòng; không dùng markdown đậm/nghiêng.`;
 
-/* ---------- Thanh Thanh thao tác trên dữ liệu (có hoàn tác) ---------- */
+/* ---------- Thanh Thanh thao tác trên dữ liệu: ĐỀ XUẤT → sếp đồng ý → làm (có hoàn tác) ---------- */
 const TT_ACTS={
-  han_che:{label:"Bị hạn chế",help:'đánh dấu mail bị hạn chế ("co") hoặc gỡ hạn chế / live lại ("khong")'},
-  giai_doan:{label:"Giai đoạn",help:'đổi giai đoạn: "working" (Đang làm) | "redo" (Chuẩn bị làm lại) | "ga" (Tạo gà) | "none" (Chưa phân loại)'},
-  khang:{label:"Kháng",help:'tình trạng kháng: "none" | "wait_phone" (Đợi add số) | "wait_appeal" (Đợi kháng) | "appealed" (Đã kháng chờ KQ)'},
-  doi_tt:{label:"Đổi thông tin",help:'"co" = đã đổi thông tin bảo mật, "khong" = chưa đổi'},
-  gia_han_sdt:{label:"Gia hạn SĐT",help:'gia hạn SĐT thêm N ngày (gia_tri = số ngày, vd "30"), tính từ hạn cũ hoặc từ hôm nay nếu đã hết'},
-  han_sdt:{label:"Hạn SĐT",help:'đặt ngày hết hạn SĐT (gia_tri = YYYY-MM-DD)'},
-  proxy:{label:"Proxy",help:'gán proxy (gia_tri = tên proxy có trong danh sách PROXY; "" = gỡ proxy)'},
-  key:{label:"Key",help:'gán key cho mail (gia_tri = "Chủ đề / tên key" đúng như trong danh sách KEY; "" = gỡ key). Chỉ dùng key đã có — chưa có thì bảo sếp tạo ở tab 🔑 Key'},
-  nhan_vien:{label:"Nhân viên",help:'gán nhân viên phụ trách (gia_tri = tên)'},
-  noi:{label:"Nơi quản lý",help:'"home" (Nhà) | "company" (Công ty)'},
-  ghi_chu:{label:"Ghi chú",help:'thêm một dòng ghi chú vào mail (gia_tri = nội dung)'},
-  su_co:{label:"Sự cố",help:`tạo sự cố cho từng mail (gia_tri = mã loại: ${Object.entries(INC_TYPE).map(([k,v])=>`${k}=${v}`).join(", ")}; muc_do "1"|"2"|"3"; chi_tiet = mô tả)`},
-  ga:{label:"Gà",help:'"da_tao" (đã bấm tạo gà) | "da_duyet" | "da_ban" | "bi_diss"'},
+  han_che:{muc:"mail",label:"Bị hạn chế",help:'đánh dấu mail bị hạn chế ("co") hoặc gỡ hạn chế / live lại ("khong")'},
+  giai_doan:{muc:"mail",label:"Giai đoạn",help:'đổi giai đoạn: "working" (Đang làm) | "redo" (Chuẩn bị làm lại) | "ga" (Tạo gà) | "none" (Chưa phân loại)'},
+  khang:{muc:"mail",label:"Kháng",help:'tình trạng kháng: "none" | "wait_phone" (Đợi add số) | "wait_appeal" (Đợi kháng) | "appealed" (Đã kháng chờ KQ)'},
+  doi_tt:{muc:"mail",label:"Đổi thông tin",help:'"co" = đã đổi thông tin bảo mật, "khong" = chưa đổi'},
+  gia_han_sdt:{muc:"mail",label:"Gia hạn SĐT",help:'gia hạn SĐT thêm N ngày (gia_tri = số ngày), tính từ hạn cũ hoặc từ hôm nay nếu đã hết'},
+  han_sdt:{muc:"mail",label:"Hạn SĐT",help:'đặt ngày hết hạn SĐT (gia_tri = YYYY-MM-DD)'},
+  proxy:{muc:"mail",label:"Proxy",help:'gán proxy (gia_tri = tên proxy; "" = gỡ proxy)'},
+  key:{muc:"mail",label:"Key",help:'gán key cho mail (gia_tri = "Chủ đề / tên key"; "" = gỡ key)'},
+  nhan_vien:{muc:"mail",label:"Nhân viên",help:'gán nhân viên phụ trách (gia_tri = tên)'},
+  noi:{muc:"mail",label:"Nơi quản lý",help:'"home" (Nhà) | "company" (Công ty)'},
+  ghi_chu:{muc:"mail",label:"Ghi chú",help:'THÊM một dòng ghi chú vào mail (gia_tri = nội dung)'},
+  ga:{muc:"mail",label:"Gà",help:'"da_tao" | "da_duyet" | "da_ban" | "bi_diss"'},
+  sua_mail:{muc:"mail",label:"Sửa mail",help:'sửa một trường bất kỳ của mail (truong = tên trường bên dưới, gia_tri = giá trị mới)'},
+  them_mail:{muc:"mail",label:"Thêm mail",help:'thêm mail MỚI chưa có trong hệ thống (emails = các email mới; gia_tri = "home"/"company" hoặc "")'},
+  xoa_mail:{muc:"mail",label:"Xóa mail",danger:true,help:'XÓA mail khỏi hệ thống (chỉ khi sếp nói rõ là xóa)'},
+  su_co:{muc:"mail",label:"Sự cố",help:`tạo sự cố cho từng mail (gia_tri = mã loại: ${Object.entries(INC_TYPE).map(([k,v])=>`${k}=${v}`).join(", ")}; muc_do "1"|"2"|"3"; chi_tiet = mô tả)`},
+  su_co_xong:{muc:"inc",label:"Sự cố đã xử lý",help:'đóng sự cố (doi_tuong = mã sự cố, cách nhau dấu phẩy; hoặc emails = đóng hết sự cố đang mở của các mail đó)'},
+  su_co_mo_lai:{muc:"inc",label:"Mở lại sự cố",help:'mở lại sự cố đã xử lý (doi_tuong = mã, hoặc emails)'},
+  xoa_su_co:{muc:"inc",label:"Xóa sự cố",danger:true,help:'xóa sự cố (doi_tuong = mã, hoặc emails = xóa mọi sự cố của các mail đó)'},
+  them_proxy:{muc:"proxy",label:"Thêm proxy",help:'tạo proxy (doi_tuong = tên mới, vd P05; gia_tri = "ip:port" hoặc "ip:port:user:pass" nếu có)'},
+  sua_proxy:{muc:"proxy",label:"Sửa proxy",help:'sửa proxy (doi_tuong = tên proxy, truong, gia_tri)'},
+  xoa_proxy:{muc:"proxy",label:"Xóa proxy",danger:true,help:'xóa proxy và gỡ khỏi các mail đang dùng (doi_tuong = tên)'},
+  them_key:{muc:"key",label:"Thêm key",help:'tạo key (doi_tuong = "Chủ đề / tên key"; gia_tri = các link kênh, mỗi link một dòng, có thể rỗng)'},
+  sua_key:{muc:"key",label:"Sửa key",help:'sửa key (doi_tuong = "Chủ đề / tên key", truong, gia_tri)'},
+  xoa_key:{muc:"key",label:"Xóa key",danger:true,help:'xóa key và gỡ khỏi các mail (doi_tuong = "Chủ đề / tên key")'},
+  doi_ten_chu_de:{muc:"topic",label:"Đổi tên chủ đề",help:'doi_tuong = tên chủ đề cũ, gia_tri = tên mới'},
 };
+const TT_MAIL_FIELDS={email:["email","Email (chỉ 1 mail)","email"],kenh_bkt:["channelUrl","Link kênh BKT","text"],ten_kenh:["channelName","Tên kênh","text"],link_sdt:["phoneLink","Link SĐT","text"],
+  sdt:["phone","SĐT (chỉ 1 mail)","phone"],mail_khoi_phuc:["recovery","Mail/SĐT khôi phục","secret"],nguon_mua:["purchaseSource","Nguồn mua","text"],ngay_mua:["purchaseDate","Ngày mua","date"],
+  ngay_bat_dau_lam:["workStartDate","Ngày bắt đầu làm","date"],ghi_chu:["note","Ghi chú (THAY toàn bộ)","text"],noi_vao:["gaLinkedTo","Gà nối vào mail","text"],
+  xac_minh_dt:["idVerified","Đã xác minh danh tính","bool"],thue:["taxAdded","Đã thêm thuế","bool"],bank:["bankAdded","Đã thêm bank","bool"],kiem_tien:["monetized","Đã bật kiếm tiền","bool"],
+  ga_da_tao:["gaCreated","Đã tạo gà","bool"],ga_duyet:["gaReview","Gà đã duyệt","bool"],ga_da_ban:["gaSold","Gà đã bán","bool"],ga_bi_diss:["gaDissed","Gà bị diss","bool"]};
+const TT_PX_FIELDS={ten:"tên",server:"ip:port hoặc ip:port:user:pass",nha_cung_cap:"nhà cung cấp",han:"ngày hết hạn",suc_chua:"số mail tối đa",ghi_chu:"ghi chú",loai:"http|socks5"};
+const TT_KEY_FIELDS={ten:"tên key",chu_de:"chuyển sang chủ đề",them_link:"thêm link (mỗi dòng 1 link)",xoa_link:"bỏ link",dat_link:"thay toàn bộ link",ghi_chu:"ghi chú"};
+const TT_FIELD_ENUM=["",...new Set([...Object.keys(TT_MAIL_FIELDS),...Object.keys(TT_PX_FIELDS),...Object.keys(TT_KEY_FIELDS)])];
 const EMAIL_FIND=/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-async function ttApply(acts,userText){
+const ttBool=v=>{const n=stripD(v);return !!n&&!/^(khong|ko|k|no|false|0|tat|off|chua|bo)\b/.test(n)};
+TT.ask=(()=>{try{return localStorage.getItem("skm-tt-ask")!=="0"}catch(e){return true}})();
+/* dry=true: chỉ xem trước (không ghi gì). Trả {lines,errors,unknown,undo:{ops}} */
+async function ttApply(acts,userText,dry=false){
   const known=emailSet();
   const inMsg=[...new Set((String(userText).match(EMAIL_FIND)||[]).map(e=>e.toLowerCase()))];
-  const pending=new Map(),prev=new Map(),newInc=[],lines=[],errors=[],unknown=new Set();
-  const view=a=>({...a,...(pending.get(a.id)||{})});
-  const set=(a,data)=>{const p=prev.get(a.id)||{};for(const k of Object.keys(data))if(!(k in p))p[k]=a[k]===undefined?null:a[k];prev.set(a.id,p);pending.set(a.id,{...(pending.get(a.id)||{}),...data})};
+  const P=new Map(),lines=[],errors=[],unknown=new Set();
+  const ent=(col,o)=>{const k=col+"/"+o.id;let e=P.get(k);if(!e){e={col,id:o.id,base:o.__new?null:o,patch:{},create:!!o.__new,del:false};P.set(k,e)}return e};
+  const view=(col,o)=>{const e=P.get(col+"/"+o.id);return e?{...(e.base||{}),...e.patch,id:o.id}:o};
+  const upd=(col,o,data)=>Object.assign(ent(col,o).patch,data);
+  const add=(col,data)=>{const o={id:crypto.randomUUID(),__new:true};ent(col,o);Object.assign(P.get(col+"/"+o.id).patch,data);return o};
+  const del=(col,o)=>{ent(col,o).del=true};
+  const gone=(col,o)=>!!P.get(col+"/"+o.id)?.del;
+  const PXS=[...S.proxies],KEYS=[...S.keys],ACCS=()=>S.accounts.concat([...P.values()].filter(e=>e.col==="accounts"&&e.create).map(e=>({id:e.id,...e.patch})));
+  const pxFind=n=>{n=stripD(n);if(!n)return null;return PXS.filter(p=>!gone("proxies",p)).find(p=>{const v=view("proxies",p);return stripD(v.name)===n||stripD(v.server||"")===n})||null};
+  const keyFind=txt=>{const {topic,name}=splitKeyText(txt);if(!name)return null;const ks=KEYS.filter(k=>!gone("keys",k)).filter(k=>stripD(view("keys",k).name)===stripD(name));
+    if(topic)return ks.find(k=>stripD(topicOf(view("keys",k)))===stripD(topic))||null;return ks.length===1?ks[0]:null};
+  const short=e=>String(e).replace(/@gmail\.com$/,"");
+  const sample=arr=>arr.length?` (${arr.slice(0,6).map(short).join(", ")}${arr.length>6?` +${arr.length-6}`:""})`:"";
   const today0=new Date(new Date().toDateString()).getTime();
+  const detach=(field,id)=>{let n=0;for(const a of ACCS()){if(view("accounts",a)[field]===id&&!gone("accounts",a)){upd("accounts",a,{[field]:""});n++}}return n};
   for(const act of acts||[]){
     const def=TT_ACTS[act.loai];if(!def)continue;
-    const ems=[...new Set([...(act.emails||[]).map(e=>String(e).toLowerCase().trim()),...(act.email_trong_tin_nhan?inMsg:[])])];
-    const accs=[];for(const e of ems){const a=known.get(e);if(a)accs.push(a);else if(e)unknown.add(e)}
-    if(!accs.length){if(ems.length)errors.push(`${def.label}: không có mail nào khớp`);continue}
-    const v=String(act.gia_tri||"").trim();let desc="";
-    if(act.loai==="han_che"){const on=yesText(v)||stripD(v)==="co";desc=on?"→ bị hạn chế":"→ live lại";
-      accs.forEach(a=>{const d={restricted:on,channelStatus:on?"limited":"normal"};if(on&&stageOf(view(a))==="working")d.stage="none";set(a,d)})}
-    else if(act.loai==="giai_doan"){if(!STAGE[v]){errors.push("Giai đoạn không hợp lệ: "+v);continue}desc="→ "+STAGE[v][0];accs.forEach(a=>set(a,{stage:v}))}
-    else if(act.loai==="khang"){if(!APPEAL[v]){errors.push("Tình trạng kháng không hợp lệ: "+v);continue}desc="→ "+APPEAL[v][0];accs.forEach(a=>set(a,{appeal:v,appealedAt:v==="appealed"?Date.now():null}))}
-    else if(act.loai==="doi_tt"){const on=yesText(v)||stripD(v)==="co";desc=on?"→ đã đổi TT":"→ chưa đổi TT";accs.forEach(a=>set(a,{infoChanged:on}))}
-    else if(act.loai==="gia_han_sdt"){const n=parseInt(v,10);if(!(n>0&&n<1000)){errors.push("Số ngày gia hạn không hợp lệ: "+v);continue}desc=`+${n} ngày`;
-      accs.forEach(a=>{const cur=phoneExpOf(view(a));const base=cur&&cur>Date.now()?cur:today0;set(a,{phoneExpiry:base+n*DAY,phoneDate:null})})}
-    else if(act.loai==="han_sdt"){const t=parseDateFlex(v);if(!t){errors.push("Ngày hết hạn không hợp lệ: "+v);continue}desc="→ "+dshow(t);accs.forEach(a=>set(a,{phoneExpiry:t,phoneDate:null}))}
-    else if(act.loai==="proxy"){let pid="";if(v){const p=S.proxies.find(p=>String(p.name).toLowerCase()===v.toLowerCase());if(!p){errors.push(`Không có proxy "${v}"`);continue}pid=p.id}desc=v?"→ "+v:"→ gỡ proxy";accs.forEach(a=>set(a,{proxyId:pid}))}
-    else if(act.loai==="key"){let kid="";if(v){const {topic,name}=splitKeyText(v);const k=findKey(topic,name);if(!k){errors.push(`Không có key "${v}"`);continue}kid=k.id;desc="→ "+keyLabel(k)}else desc="→ gỡ key";accs.forEach(a=>set(a,{keyId:kid}))}
-    else if(act.loai==="nhan_vien"){desc="→ "+(v||"(trống)");accs.forEach(a=>set(a,{staff:v}))}
-    else if(act.loai==="noi"){if(!LOCATION[v]){errors.push("Nơi quản lý không hợp lệ: "+v);continue}desc="→ "+LOCATION[v][0];accs.forEach(a=>set(a,{location:v}))}
-    else if(act.loai==="ghi_chu"){if(!v)continue;desc=`"${v.slice(0,40)}"`;accs.forEach(a=>{const cur=view(a).note||"";set(a,{note:(cur?cur+"\n":"")+`[${dshow(Date.now())}] ${v}`})})}
-    else if(act.loai==="su_co"){const type=INC_TYPE[v]?v:"other";const sev=["1","2","3"].includes(act.muc_do)?+act.muc_do:2;desc=`${INC_TYPE[type]} (${SEV[sev][0]})`;
-      accs.forEach(a=>newInc.push({id:crypto.randomUUID(),data:{accountId:a.id,type,severity:sev,detail:String(act.chi_tiet||"").trim(),status:"open",createdAt:Date.now(),resolvedAt:null,by:"thanhthanh"}}))}
-    else if(act.loai==="ga"){const m={da_tao:{gaCreated:true,stage:"ga"},da_duyet:{gaReview:"approved",gaCreated:true,stage:"ga"},da_ban:{gaSold:true},bi_diss:{gaDissed:true}}[v];if(!m){errors.push("Trạng thái gà không hợp lệ: "+v);continue}desc="→ "+v.replace("_"," ");accs.forEach(a=>set(a,m))}
-    lines.push(`${def.label} ${desc}: ${accs.length} mail`);
+    const v=String(act.gia_tri??"").trim(),obj=String(act.doi_tuong??"").trim(),f=String(act.truong??"").trim();
+    const L=t=>lines.push((def.danger?"🗑 ":"")+t);
+    const ems=[...new Set([...(act.emails||[]).map(e=>String(e).toLowerCase().trim()),...(act.email_trong_tin_nhan?inMsg:[])])].filter(Boolean);
+    if(def.muc==="mail"){
+      if(act.loai==="them_mail"){
+        const fresh=ems.filter(e=>EMAIL_RE.test(e)&&!known.has(e)),dup=ems.filter(e=>known.has(e));
+        if(dup.length)errors.push(`Thêm mail: ${dup.length} email đã có sẵn${sample(dup)}`);
+        if(!fresh.length)continue;
+        const loc=LOCATION[v]?v:(S.loc==="company"?"company":"home");
+        for(const e of fresh){const d={email:e,staff:"",channelName:"",channelUrl:"",note:"",location:loc,infoChanged:false,restricted:false,phoneLink:"",channelStatus:"normal",stage:"none",appeal:"none",appealedAt:null,workStartDate:null,purchaseDate:null,purchaseSource:"",phoneDate:null,phoneExpiry:null,proxyId:"",keyId:"",idVerified:false,taxAdded:false,bankAdded:false,monetized:false,gaSold:false,gaDissed:false,gaCreated:false,gaLinkedTo:"",gaReview:"waiting",phoneHash:"",twofaHash:"",twofaStatus:"off",password:"",recovery:"",phone:"",twofaRecovery:"",createdAt:Date.now()};
+          const o=add("accounts",d);known.set(e,o)}
+        L(`Thêm ${fresh.length} mail mới → ${LOCATION[loc][0]}${sample(fresh)}`);continue;
+      }
+      const accs=[];for(const e of ems){const a=known.get(e);if(a&&!gone("accounts",a))accs.push(a);else unknown.add(e)}
+      if(!accs.length){if(ems.length)errors.push(`${def.label}: không có mail nào khớp`);continue}
+      const V=a=>view("accounts",a),names=accs.map(a=>V(a).email);let desc="";
+      const U=(a,d)=>upd("accounts",a,d);
+      if(act.loai==="han_che"){const on=ttBool(v);desc=on?"→ bị hạn chế":"→ live lại";accs.forEach(a=>{const d={restricted:on,channelStatus:on?"limited":"normal"};if(on&&stageOf(V(a))==="working")d.stage="none";U(a,d)})}
+      else if(act.loai==="giai_doan"){if(!STAGE[v]){errors.push("Giai đoạn không hợp lệ: "+v);continue}desc="→ "+STAGE[v][0];accs.forEach(a=>U(a,{stage:v}))}
+      else if(act.loai==="khang"){if(!APPEAL[v]){errors.push("Tình trạng kháng không hợp lệ: "+v);continue}desc="→ "+APPEAL[v][0];accs.forEach(a=>U(a,{appeal:v,appealedAt:v==="appealed"?Date.now():null}))}
+      else if(act.loai==="doi_tt"){const on=ttBool(v);desc=on?"→ đã đổi TT":"→ chưa đổi TT";accs.forEach(a=>U(a,{infoChanged:on}))}
+      else if(act.loai==="gia_han_sdt"){const n=parseInt(v,10);if(!(n>0&&n<1000)){errors.push("Số ngày gia hạn không hợp lệ: "+v);continue}desc=`+${n} ngày`;
+        accs.forEach(a=>{const cur=phoneExpOf(V(a));const base=cur&&cur>Date.now()?cur:today0;U(a,{phoneExpiry:base+n*DAY,phoneDate:null})})}
+      else if(act.loai==="han_sdt"){const t=parseDateFlex(v);if(!t){errors.push("Ngày hết hạn không hợp lệ: "+v);continue}desc="→ "+dshow(t);accs.forEach(a=>U(a,{phoneExpiry:t,phoneDate:null}))}
+      else if(act.loai==="proxy"){let pid="";if(v){const p=pxFind(v);if(!p){errors.push(`Không có proxy "${v}"`);continue}pid=p.id}desc=v?"→ "+v:"→ gỡ proxy";accs.forEach(a=>U(a,{proxyId:pid}))}
+      else if(act.loai==="key"){let kid="";if(v){const k=keyFind(v);if(!k){errors.push(`Không có key "${v}"`);continue}kid=k.id;desc="→ "+keyLabel(view("keys",k))}else desc="→ gỡ key";accs.forEach(a=>U(a,{keyId:kid}))}
+      else if(act.loai==="nhan_vien"){desc="→ "+(v||"(trống)");accs.forEach(a=>U(a,{staff:v}))}
+      else if(act.loai==="noi"){if(!LOCATION[v]){errors.push("Nơi quản lý không hợp lệ: "+v);continue}desc="→ "+LOCATION[v][0];accs.forEach(a=>U(a,{location:v}))}
+      else if(act.loai==="ghi_chu"){if(!v)continue;desc=`thêm "${v.slice(0,40)}"`;accs.forEach(a=>{const cur=V(a).note||"";U(a,{note:(cur?cur+"\n":"")+`[${dshow(Date.now())}] ${v}`})})}
+      else if(act.loai==="ga"){const m={da_tao:{gaCreated:true,stage:"ga"},da_duyet:{gaReview:"approved",gaCreated:true,stage:"ga"},da_ban:{gaSold:true},bi_diss:{gaDissed:true}}[v];if(!m){errors.push("Trạng thái gà không hợp lệ: "+v);continue}desc="→ "+v.replace("_"," ");accs.forEach(a=>U(a,m))}
+      else if(act.loai==="su_co"){const type=INC_TYPE[v]?v:"other";const sev=["1","2","3"].includes(act.muc_do)?+act.muc_do:2;desc=`${INC_TYPE[type]} (${SEV[sev][0]})`;
+        accs.forEach(a=>add("incidents",{accountId:a.id,type,severity:sev,detail:String(act.chi_tiet||"").trim(),status:"open",createdAt:Date.now(),resolvedAt:null,by:"thanhthanh"}))}
+      else if(act.loai==="xoa_mail"){if(accs.length>50){errors.push(`Xóa mail: ${accs.length} mail là quá nhiều — xóa trên bảng (tối đa 50 mỗi lần qua Thanh Thanh)`);continue}desc="";accs.forEach(a=>del("accounts",a))}
+      else if(act.loai==="sua_mail"){
+        const fd=TT_MAIL_FIELDS[f];if(!fd){errors.push(`Sửa mail: không có trường "${f}"`);continue}
+        const [key,label,type]=fd;let val;
+        if(type==="email"||type==="phone"){if(accs.length!==1){errors.push(`${label}: mỗi lần chỉ sửa 1 mail`);continue}}
+        if(type==="email"){const e=v.toLowerCase();if(!EMAIL_RE.test(e)){errors.push("Email mới không hợp lệ: "+v);continue}if(known.has(e)){errors.push("Email mới đã có: "+e);continue}val=e;known.set(e,accs[0])}
+        else if(type==="date"){if(v&&!parseDateFlex(v)){errors.push(`${label}: ngày không hợp lệ "${v}"`);continue}val=v?parseDateFlex(v):null}
+        else if(type==="bool"){const on=ttBool(v);val=key==="gaReview"?(on?"approved":"waiting"):on}
+        else if(type==="phone"){
+          const h=await hashPhone(v);
+          if(h){const same=[];for(const a of S.accounts){if(a.id===accs[0].id)continue;if(await phoneHashOf(a)===h)same.push(a.email)}if(same.length>=PHONE_SHARE_MAX){errors.push(`SĐT này đã dùng cho ${same.length} mail (${same.join(", ")}) — tối đa ${PHONE_SHARE_MAX}`);continue}}
+          U(accs[0],{phone:dry?"":await encField(v),phoneHash:h});desc=`${label} → ${v||"(xóa)"}`;L(`Sửa mail · ${desc}: 1 mail${sample(names)}`);continue}
+        else if(type==="secret"){accs.forEach(()=>0);const enc=dry?"":await encField(v);accs.forEach(a=>U(a,{[key]:enc}));desc=`${label} → (đã đặt)`;L(`Sửa mail · ${desc}: ${accs.length} mail${sample(names)}`);continue}
+        else val=v;
+        accs.forEach(a=>U(a,{[key]:val}));if(key==="gaReview"&&val==="approved")accs.forEach(a=>U(a,{gaCreated:true}));
+        desc=`· ${label} → ${type==="bool"?(ttBool(v)?"có":"không"):type==="date"?(val?dshow(val):"(trống)"):(String(val).slice(0,50)||"(trống)")}`;
+      }
+      L(`${def.label}${desc?" "+desc:""}: ${accs.length} mail${sample(names)}`);
+    }
+    else if(def.muc==="inc"){
+      const codes=obj.split(/[\s,;]+/).map(x=>x.trim().toLowerCase()).filter(x=>x.length>=4);
+      const byMail=new Set();for(const e of ems){const a=known.get(e);if(a)byMail.add(a.id);else unknown.add(e)}
+      let incs=S.incidents.filter(i=>codes.some(c=>i.id.toLowerCase().startsWith(c))||byMail.has(i.accountId));
+      if(act.loai==="su_co_xong")incs=incs.filter(i=>i.status!=="resolved");
+      if(act.loai==="su_co_mo_lai")incs=incs.filter(i=>i.status==="resolved");
+      if(!incs.length){errors.push(`${def.label}: không tìm thấy sự cố phù hợp`);continue}
+      for(const i of incs){if(act.loai==="xoa_su_co")del("incidents",i);else upd("incidents",i,act.loai==="su_co_xong"?{status:"resolved",resolvedAt:Date.now()}:{status:"open",resolvedAt:null})}
+      L(`${def.label}: ${incs.length} sự cố${sample(incs.map(i=>accById(i.accountId)?.email||"(mail đã xóa)"))}`);
+    }
+    else if(def.muc==="proxy"){
+      if(act.loai==="them_proxy"){
+        if(!obj){errors.push("Thêm proxy: thiếu tên");continue}if(pxFind(obj)){errors.push(`Proxy "${obj}" đã có`);continue}
+        const px=v?parseProxyText(v):null;
+        const o=add("proxies",{name:obj,server:px?.server||"",auth:px?.auth?(dry?"":await encField(px.auth)):"",type:px?.type||"http",provider:"",expiry:null,cap:PROXY_CAP,note:"",createdAt:Date.now()});
+        PXS.push(o);L(`Thêm proxy ${obj}${px?.server?" ("+px.server+")":""}`);continue;
+      }
+      const p=pxFind(obj);if(!p){errors.push(`Không có proxy "${obj}"`);continue}
+      const pv=view("proxies",p);
+      if(act.loai==="xoa_proxy"){const n=detach("proxyId",p.id);del("proxies",p);L(`Xóa proxy ${pv.name} (gỡ khỏi ${n} mail)`);continue}
+      if(f==="ten"){if(!v){errors.push("Tên proxy trống");continue}const other=pxFind(v);if(other&&other.id!==p.id){errors.push(`Proxy "${v}" đã có`);continue}upd("proxies",p,{name:v});L(`Sửa proxy ${pv.name} · tên → ${v}`)}
+      else if(f==="server"){const px=parseProxyText(v);if(!px||!px.server){errors.push("Server proxy không hợp lệ: "+v);continue}const d={server:px.server,type:px.type};if(px.auth)d.auth=dry?"":await encField(px.auth);upd("proxies",p,d);L(`Sửa proxy ${pv.name} · server → ${px.server}${px.auth?" (kèm user:pass)":""}`)}
+      else if(f==="nha_cung_cap"){upd("proxies",p,{provider:v});L(`Sửa proxy ${pv.name} · nhà cung cấp → ${v||"(trống)"}`)}
+      else if(f==="han"){const t=v?parseDateFlex(v):null;if(v&&!t){errors.push("Ngày hết hạn proxy không hợp lệ: "+v);continue}upd("proxies",p,{expiry:t});L(`Sửa proxy ${pv.name} · hạn → ${t?dshow(t):"(trống)"}`)}
+      else if(f==="suc_chua"){const n=parseInt(v,10);if(!(n>0)){errors.push("Sức chứa không hợp lệ: "+v);continue}upd("proxies",p,{cap:n});L(`Sửa proxy ${pv.name} · sức chứa → ${n} mail`)}
+      else if(f==="ghi_chu"){upd("proxies",p,{note:v});L(`Sửa proxy ${pv.name} · ghi chú`)}
+      else if(f==="loai"){const t=/socks/i.test(v)?"socks5":"http";upd("proxies",p,{type:t});L(`Sửa proxy ${pv.name} · loại → ${PROXY_TYPE[t]}`)}
+      else errors.push(`Sửa proxy: không có trường "${f}"`);
+    }
+    else if(def.muc==="key"){
+      if(act.loai==="them_key"){
+        const {topic,name}=splitKeyText(obj);if(!name){errors.push("Thêm key: thiếu tên");continue}
+        if(keyFind(topic?`${topic} / ${name}`:name)&&(topic||true)){const k=keyFind(topic?`${topic} / ${name}`:name);if(k&&stripD(topicOf(view("keys",k)))===stripD(topic||NO_TOPIC)){errors.push(`Key "${obj}" đã có`);continue}}
+        const links=parseLinks(v);const o=add("keys",{name,topic,links,note:"",createdAt:Date.now()});KEYS.push(o);
+        L(`Thêm key ${topic||NO_TOPIC} › ${name}${links.length?` (${links.length} link)`:""}`);continue;
+      }
+      const k=keyFind(obj);if(!k){errors.push(`Không có key "${obj}"`);continue}
+      const kv=view("keys",k),lab=keyLabel(kv);
+      if(act.loai==="xoa_key"){const n=detach("keyId",k.id);del("keys",k);L(`Xóa key ${lab} (gỡ khỏi ${n} mail)`);continue}
+      if(f==="ten"){if(!v){errors.push("Tên key trống");continue}upd("keys",k,{name:v});L(`Sửa key ${lab} · tên → ${v}`)}
+      else if(f==="chu_de"){upd("keys",k,{topic:v});L(`Sửa key ${lab} · chuyển sang chủ đề ${v||NO_TOPIC}`)}
+      else if(f==="them_link"){const add2=parseLinks(v).filter(u=>!keyLinks(kv).includes(u));if(!add2.length){errors.push(`Key ${lab}: không có link mới`);continue}upd("keys",k,{links:[...keyLinks(kv),...add2]});L(`Sửa key ${lab} · thêm ${add2.length} link`)}
+      else if(f==="xoa_link"){const rm=new Set(parseLinks(v));const left=keyLinks(kv).filter(u=>!rm.has(u));const n=keyLinks(kv).length-left.length;if(!n){errors.push(`Key ${lab}: không có link nào khớp để bỏ`);continue}upd("keys",k,{links:left});L(`Sửa key ${lab} · bỏ ${n} link`)}
+      else if(f==="dat_link"){const ls=parseLinks(v);upd("keys",k,{links:ls});L(`Sửa key ${lab} · thay toàn bộ link (${ls.length} link)`)}
+      else if(f==="ghi_chu"){upd("keys",k,{note:v});L(`Sửa key ${lab} · ghi chú`)}
+      else errors.push(`Sửa key: không có trường "${f}"`);
+    }
+    else if(def.muc==="topic"){
+      if(!v){errors.push("Đổi tên chủ đề: thiếu tên mới");continue}
+      const ks=KEYS.filter(k=>!gone("keys",k)&&stripD(topicOf(view("keys",k)))===stripD(obj));
+      if(!ks.length){errors.push(`Không có chủ đề "${obj}"`);continue}
+      ks.forEach(k=>upd("keys",k,{topic:v}));L(`Đổi tên chủ đề ${obj} → ${v} (${ks.length} key)`);
+    }
   }
-  if(pending.size||newInc.length){
-    let batch=writeBatch(db),n=0;
-    for(const [id,data] of pending){batch.update(doc(db,"accounts",id),{...data,updatedAt:Date.now()});if(++n>=400){await batch.commit();batch=writeBatch(db);n=0}}
-    for(const x of newInc){batch.set(doc(db,"incidents",x.id),x.data);if(++n>=400){await batch.commit();batch=writeBatch(db);n=0}}
-    if(n)await batch.commit();
+  const res={lines,errors,unknown:[...unknown].slice(0,30),undo:null};
+  if(dry||!P.size)return res;
+  const ops=[];let batch=writeBatch(db),n=0;
+  for(const e of P.values()){
+    const ref=doc(db,e.col,e.id);
+    if(e.create&&e.del)continue;
+    if(e.del){batch.delete(ref);const {id:_x,...data}=e.base;ops.push({c:e.col,id:e.id,t:"set",d:data})}
+    else if(e.create){batch.set(ref,{...e.patch,updatedAt:Date.now()});ops.push({c:e.col,id:e.id,t:"del"})}
+    else{const ks=Object.keys(e.patch);if(!ks.length)continue;const prev={};for(const k of ks)prev[k]=e.base[k]===undefined?null:e.base[k];batch.update(ref,{...e.patch,updatedAt:Date.now()});ops.push({c:e.col,id:e.id,t:"upd",p:prev})}
+    if(++n>=400){await batch.commit();batch=writeBatch(db);n=0}
   }
-  return {lines,errors,unknown:[...unknown].slice(0,30),undo:(pending.size||newInc.length)?{acc:[...prev].map(([id,p])=>({id,p})),inc:newInc.map(x=>x.id)}:null};
+  if(n)await batch.commit();
+  res.undo={ops};return res;
 }
 async function ttUndo(idx){
   const d=todayDoc();if(!d)return;const m=(d.chat||[])[idx];if(!m||!m.undo||m.undone)return;
   if(!confirm("Hoàn tác các thao tác Thanh Thanh đã làm ở tin nhắn này?"))return;
+  const ops=m.undo.ops||[...(m.undo.acc||[]).map(x=>({c:"accounts",id:x.id,t:"upd",p:x.p})),...(m.undo.inc||[]).map(id=>({c:"incidents",id,t:"del"}))];
+  const has=(c,id)=>c==="accounts"?!!accById(id):c==="proxies"?!!proxyById(id):c==="keys"?!!keyById(id):S.incidents.some(i=>i.id===id);
   try{
     let batch=writeBatch(db),n=0;
-    for(const {id,p} of m.undo.acc){if(!accById(id))continue;batch.update(doc(db,"accounts",id),{...p,updatedAt:Date.now()});if(++n>=400){await batch.commit();batch=writeBatch(db);n=0}}
-    for(const id of m.undo.inc||[]){batch.delete(doc(db,"incidents",id));if(++n>=400){await batch.commit();batch=writeBatch(db);n=0}}
+    for(const o of [...ops].reverse()){const ref=doc(db,o.c,o.id);
+      if(o.t==="set")batch.set(ref,o.d);else if(o.t==="del")batch.delete(ref);else{if(!has(o.c,o.id))continue;batch.update(ref,{...o.p,updatedAt:Date.now()})}
+      if(++n>=400){await batch.commit();batch=writeBatch(db);n=0}}
     if(n)await batch.commit();
-    const chat=d.chat.map((x,i)=>i===idx?{...x,undone:true}:x);
-    const actions=(d.actions||[]).map(a=>a.at===m.at?{...a,undone:true}:a);
+    const cur=todayDoc();
+    const chat=cur.chat.map((x,i)=>i===idx?{...x,undone:true}:x);
+    const actions=(cur.actions||[]).map(a=>a.at===m.at?{...a,undone:true}:a);
     await saveToday({chat,actions});toast("Đã hoàn tác");
   }catch(e){toast("Hoàn tác lỗi: "+(e.code||e.message))}
 }
+/* sếp bấm Đồng ý / Bỏ qua (hoặc nói "ok làm đi") cho đề xuất */
+async function ttPlanDecide(idx,ok){
+  const d=todayDoc();const m=d?.chat?.[idx];if(!m?.plan||m.plan.status!=="pending"||TT.applying)return;
+  TT.applying=true;render();
+  try{
+    let nm;const cur0=todayDoc();let actions=cur0.actions||[];
+    if(!ok)nm={...m,plan:{...m.plan,status:"rejected",at:Date.now()}};
+    else{
+      const ap=await ttApply(m.plan.acts,m.plan.text,false);
+      nm={...m,plan:{...m.plan,status:"done",at:Date.now()},acts:ap.lines,actErr:[...ap.errors,...(ap.unknown.length?[`${ap.unknown.length} email không có trong hệ thống: ${ap.unknown.join(", ")}`]:[])]};
+      if(ap.undo)nm.undo=ap.undo;
+      if(ap.lines.length)actions=[...actions,{at:m.at,text:ap.lines.join("; "),by:"thanhthanh"}];
+      toast(ap.lines.length?"Đã làm: "+ap.lines.join("; "):"Không có gì để làm");
+    }
+    const cur=todayDoc();
+    await saveToday({chat:cur.chat.map((x,i)=>i===idx?nm:x),actions});
+  }catch(e){toast("Lỗi khi làm: "+(e.code||e.message))}
+  finally{TT.applying=false;render()}
+}
+function ttAskToggle(){
+  if(TT.ask&&!confirm('Chuyển sang "Tự làm": Thanh Thanh sẽ thay đổi dữ liệu NGAY không chờ sếp đồng ý (vẫn có Hoàn tác). Đồng ý?'))return;
+  TT.ask=!TT.ask;try{localStorage.setItem("skm-tt-ask",TT.ask?"1":"0")}catch(e){}
+  ["ttAsk","ttpAsk"].forEach(id=>{if($(id))$(id).innerHTML=ttAskLabel()});toast(TT.ask?"Thanh Thanh sẽ hỏi trước mọi thay đổi":"Thanh Thanh sẽ tự làm luôn");
+}
+const ttAskLabel=()=>TT.ask?"🛡 Hỏi trước":'<span style="color:var(--warn)">⚡ Tự làm</span>';
+const chatSig=d=>{const c=d.chat||[];return c.length+(TT.busy?1:0)+":"+c.filter(m=>m.undone).length+":"+c.map(m=>m.plan?m.plan.status[0]:"").join("")+(TT.applying?"A":"")};
 function ttContext(){
   const d=todayDoc()||{tasks:[],issues:[]};
   const prev=S.days.filter(x=>x.id<dayKey())[0];
@@ -1808,6 +1977,9 @@ NHẮC TỰ ĐỘNG từ dữ liệu: ${reminders().map(r=>`${r.title}: ${r.n}${
 ${prev?`NGÀY TRƯỚC (${dayShort(prev.id)}): ${prev.summary?.tom_tat||"(chưa tổng kết)"} | chưa xong: ${(prev.tasks||[]).filter(t=>!t.done).map(t=>t.text).join("; ")||"không"} | vấn đề: ${(prev.issues||[]).map(i=>i.text).join("; ")||"không"}`:""}
 PROXY: ${S.proxies.map(p=>{const st=proxyStats(p);return `${p.name} ${st.total}/${st.cap} mail, live ${st.live}, hạn chế ${st.res}, ${st.channels} kênh`}).join("; ")||"(chưa có)"}
 THAO TÁC ĐÃ LÀM HÔM NAY: ${(d.actions||[]).map(a=>`${hm(a.at)} ${a.text}${a.undone?" (đã hoàn tác)":""}`).join("; ")||"(chưa có)"}
+ĐỀ XUẤT ĐANG CHỜ SẾP DUYỆT: ${(d.chat||[]).filter(m=>m.plan?.status==="pending").map(m=>m.plan.preview.join("; ")).join(" | ")||"(không có)"}
+ĐỀ XUẤT SẾP ĐÃ BỎ QUA HÔM NAY: ${(d.chat||[]).filter(m=>m.plan?.status==="rejected").map(m=>m.plan.preview.join("; ")).join(" | ")||"(không có)"}
+SỰ CỐ ĐANG MỞ (mã | email | loại | mức | mô tả): ${S.incidents.filter(i=>i.status!=="resolved").slice(0,100).map(i=>`${i.id.slice(0,8)} | ${accById(i.accountId)?.email||"(mail đã xóa)"} | ${INC_TYPE[i.type]||i.type} | ${i.severity} | ${(i.detail||"").slice(0,60)}`).join("; ")||"(không có)"}
 KEY (chủ đề / key: mail, đang làm, bị hạn chế, chuẩn bị làm lại, cần làm lại, số link kênh): ${S.keys.map(k=>{const st=keyStats(k);return `${topicOf(k)} / ${k.name}: ${st.total} mail, làm ${st.working}, hạn chế ${st.res}, làm lại ${st.redo}, cần làm lại ${st.need}, ${keyLinks(k).length} link`}).join("; ")||"(chưa có)"}
 DANH SÁCH MAIL (${S.accounts.length}) — email | trạng thái | giai đoạn | kháng | đổi TT | proxy | key | SĐT còn | nhân viên:
 ${mails||"(trống)"}`;
@@ -1815,7 +1987,8 @@ ${mails||"(trống)"}`;
 const TT_SCHEMA=()=>jObj({tra_loi:jStr,
   them_viec:jArr(jObj({noi_dung:jStr,nhom:jStr,emails:jArr(jStr),uu_tien:{type:"string",enum:["cao","thuong"]}})),
   xong_viec:jArr(jStr),xoa_viec:jArr(jStr),van_de:jArr(jStr),
-  thao_tac:jArr(jObj({loai:{type:"string",enum:Object.keys(TT_ACTS)},emails:jArr(jStr),email_trong_tin_nhan:{type:"boolean"},gia_tri:jStr,muc_do:{type:"string",enum:["","1","2","3"]},chi_tiet:jStr}))});
+  thao_tac:jArr(jObj({loai:{type:"string",enum:Object.keys(TT_ACTS)},emails:jArr(jStr),email_trong_tin_nhan:{type:"boolean"},doi_tuong:jStr,truong:{type:"string",enum:TT_FIELD_ENUM},gia_tri:jStr,muc_do:{type:"string",enum:["","1","2","3"]},chi_tiet:jStr})),
+  duyet_de_xuat:{type:"string",enum:["","dong_y","bo_qua"]}});
 async function ttSend(text){
   text=String(text||"").trim();if(!text||TT.busy)return;
   if(!todayDoc())await ensureToday();
@@ -1841,14 +2014,21 @@ async function ttSend(text){
     const seenI=new Set((cur.issues||[]).map(i=>normTask(i.text)));
     const issues=[...(cur.issues||[]),...out.van_de.filter(s=>s.trim()&&!seenI.has(normTask(s))&&seenI.add(normTask(s))).map(s=>{chg.issue++;return {id:newTid(),text:s.trim(),at:Date.now(),src:"thanhthanh"}})];
     // thao tác thật trên dữ liệu
-    let ap={lines:[],errors:[],unknown:[],undo:null};
-    if(out.thao_tac.length){try{ap=await ttApply(out.thao_tac,text)}catch(e){ap.errors.push("Lỗi khi cập nhật: "+(e.code||e.message))}}
+    let ap={lines:[],errors:[],unknown:[],undo:null},plan=null;
+    const decide=out.duyet_de_xuat==="dong_y"||out.duyet_de_xuat==="bo_qua"?out.duyet_de_xuat:"";
+    if(out.thao_tac.length&&!(decide==="dong_y"&&(cur.chat||[]).some(m=>m.plan?.status==="pending"))){
+      if(TT.ask){try{const pv=await ttApply(out.thao_tac,text,true);ap={...pv,lines:[],undo:null};if(pv.lines.length)plan={acts:out.thao_tac,text,status:"pending",preview:pv.lines}}catch(e){ap.errors.push("Lỗi khi xem trước: "+(e.code||e.message))}}
+      else{try{ap=await ttApply(out.thao_tac,text)}catch(e){ap.errors.push("Lỗi khi cập nhật: "+(e.code||e.message))}}
+    }
     const at=Date.now();
     const msg={role:"assistant",text:out.tra_loi,raw:JSON.stringify(out),at,chg,acts:ap.lines,actErr:[...ap.errors,...(ap.unknown.length?[`${ap.unknown.length} email không có trong hệ thống: ${ap.unknown.join(", ")}`]:[])]};
     if(ap.undo)msg.undo=ap.undo;
+    if(plan)msg.plan=plan;
     const actions=ap.lines.length?[...(cur.actions||[]),{at,text:ap.lines.join("; "),by:"thanhthanh"}]:(cur.actions||[]);
     await saveToday({tasks,issues,actions,chat:[...(cur.chat||chat),msg]});
     if(ap.lines.length)toast("Thanh Thanh đã cập nhật: "+ap.lines.join("; "));
+    if(decide){const ch=todayDoc().chat||[];let k=-1;for(let x=ch.length-2;x>=0;x--)if(ch[x].plan?.status==="pending"){k=x;break}
+      if(k>=0){TT.busy=false;await ttPlanDecide(k,decide==="dong_y")}}
     ttSpeak(out.tra_loi);
   }catch(e){
     const cur=todayDoc();
@@ -1893,7 +2073,7 @@ function ttGreeting(d){
   const rs=reminders();
   return `${hi}! Em là Thanh Thanh đây.
 ${carried?`- Có ${carried} việc chưa xong dồn từ hôm trước, em đã để sẵn trong Today list.\n`:""}${rs.length?`- Dữ liệu đang có: ${rs.slice(0,4).map(r=>`${r.title.toLowerCase()} (${r.n})`).join(", ")}.\n`:""}Sáng nay sếp check thấy gì cứ kể em nghe — ví dụ "kenh12 với kenh15 bị 403, cần làm lại API" — em sẽ lên việc và nhóm lại giúp sếp.
-Sếp cũng có thể dán danh sách mail rồi bảo em "bị hạn chế", "gia hạn SĐT 30 ngày", "gán proxy P02", "chuyển sang làm lại"… em cập nhật thẳng vào hệ thống luôn (có nút Hoàn tác).`;
+Sếp cũng có thể dán danh sách mail rồi bảo em "bị hạn chế", "gia hạn SĐT 30 ngày", "gán proxy P02", "chuyển sang làm lại"… ${TT.ask?"em sẽ đưa bảng đề xuất để sếp bấm Đồng ý rồi mới làm":"em cập nhật thẳng vào hệ thống luôn"} (có nút Hoàn tác). Sếp nhờ em sửa gì trong app cũng được: mail, proxy, key, chủ đề, sự cố…`;
 }
 function chatHtml(d){
   const msgs=d.chat||[];
@@ -1902,8 +2082,10 @@ function chatHtml(d){
     if(m.role==="system")return `<div class="msg tt" style="border-color:var(--bad);color:var(--bad)">${esc(m.text)}</div>`;
     const c=m.chg||{};const chips=[c.add?`<span class="badge" style="background:var(--ok-bg);color:var(--ok)">＋ ${c.add} việc</span>`:"",c.done?`<span class="badge" style="background:var(--ok-bg);color:var(--ok)">✓ ${c.done} xong</span>`:"",c.del?`<span class="badge">− ${c.del} việc</span>`:"",c.issue?`<span class="badge hi">⚠️ ${c.issue} vấn đề</span>`:""].join("");
     const acts=(m.acts||[]).length?`<div class="actbox ${m.undone?"undone":""}">${m.acts.map(l=>`<div>🛠 ${esc(l)}</div>`).join("")}${m.undo?(m.undone?'<div class="small">↩ Đã hoàn tác</div>':`<button type="button" class="mini" data-undo="${i}">↩ Hoàn tác</button>`):""}</div>`:"";
+    const pl=m.plan;
+    const planBox=pl&&pl.status!=="done"?`<div class="actbox plan ${pl.status==="rejected"?"undone":""}"><div><b>${pl.status==="pending"?"📝 Em đề xuất — sếp duyệt giúp em:":"✕ Sếp đã bỏ qua đề xuất này"}</b></div>${pl.preview.map(l=>`<div ${l.startsWith("🗑")?'style="color:var(--bad);font-weight:600"':""}>• ${esc(l)}</div>`).join("")}${pl.status==="pending"?`<div style="display:flex;gap:6px;margin-top:7px;flex-wrap:wrap"><button type="button" class="mini primary" data-pok="${i}" ${TT.applying?"disabled":""}>✅ Đồng ý làm</button><button type="button" class="mini" data-pno="${i}" ${TT.applying?"disabled":""}>✕ Bỏ qua</button></div>`:""}</div>`:"";
     const errs=(m.actErr||[]).length?`<div class="small" style="color:var(--bad);margin-top:4px">${m.actErr.map(esc).join("<br>")}</div>`:"";
-    return `<div class="msg tt">${esc(m.text)}${acts}${errs}${chips?`<div class="chg">${chips}</div>`:""}<span class="meta">Thanh Thanh · ${hm(m.at)}</span></div>`;
+    return `<div class="msg tt">${esc(m.text)}${planBox}${acts}${errs}${chips?`<div class="chg">${chips}</div>`:""}<span class="meta">Thanh Thanh · ${hm(m.at)}</span></div>`;
   };
   return (msgs.length?"":`<div class="msg tt">${esc(ttGreeting(d))}<span class="meta">Thanh Thanh</span></div>`)+msgs.map(bubble).join("")+(TT.busy?`<div class="msg tt"><i>Thanh Thanh đang soạn…</i></div>`:"");
 }
@@ -1941,7 +2123,7 @@ function renderDay(box){
     box.innerHTML=`<div id="dayRoot" data-k="${k}" class="daygrid">
       <section class="dpanel">
         <div class="ph"><div style="display:flex;gap:10px;align-items:center"><div class="avatar" id="ttAvBig">${ttAvatar()}</div><div><h3>Thanh Thanh</h3><div class="small">Thư ký của sếp · ${esc(dayLabel(k))}</div></div></div>
-          <div style="display:flex;gap:6px;align-items:center"><button type="button" class="mini ghost" id="ttMode" title="Cài đặt AI">…</button><button type="button" class="mini" id="ttTts" title="Thanh Thanh đọc to câu trả lời">${TT.tts?"🔊 Đang đọc":"🔇 Không đọc"}</button></div></div>
+          <div style="display:flex;gap:6px;align-items:center"><button type="button" class="mini ghost" id="ttMode" title="Cài đặt AI">…</button><button type="button" class="mini" id="ttAsk" title="Hỏi trước: Thanh Thanh đề xuất, sếp bấm Đồng ý mới làm. Tự làm: làm ngay (có Hoàn tác).">${ttAskLabel()}</button><button type="button" class="mini" id="ttTts" title="Thanh Thanh đọc to câu trả lời">${TT.tts?"🔊 Đang đọc":"🔇 Không đọc"}</button></div></div>
         <div class="chat" id="ttChat"></div>
         <div class="chips" style="padding:8px 10px 0">
           <button type="button" class="mini ghost" data-q="Thanh Thanh ơi, bắt đầu ngày mới. Hôm nay có những việc gì?">☀️ Bắt đầu ngày</button>
@@ -1968,7 +2150,8 @@ function renderDay(box){
     $("ttSend").onclick=()=>ttSend(ta.value);
     $("ttMic").onclick=()=>micToggle($("ttMic"));
     $("ttMode").onclick=()=>openAiSettings();ttModeRefresh();
-    $("ttChat").addEventListener("click",e=>{const u=e.target.closest("[data-undo]");if(u)ttUndo(+u.dataset.undo)});
+    $("ttAsk").onclick=ttAskToggle;
+    $("ttChat").addEventListener("click",e=>{const u=e.target.closest("[data-undo]");if(u){ttUndo(+u.dataset.undo);return}const ok=e.target.closest("[data-pok]");if(ok){ttPlanDecide(+ok.dataset.pok,true);return}const no=e.target.closest("[data-pno]");if(no)ttPlanDecide(+no.dataset.pno,false)});
     $("ttTts").onclick=()=>{TT.tts=!TT.tts;try{localStorage.setItem("skm-tts",TT.tts?"1":"0")}catch(e){}$("ttTts").textContent=TT.tts?"🔊 Đang đọc":"🔇 Không đọc";if(!TT.tts)window.speechSynthesis?.cancel()};
     $("dayRoot").querySelectorAll("[data-q]").forEach(b=>b.onclick=()=>ttSend(b.dataset.q));
     $("dayRoot").querySelectorAll("[data-fill]").forEach(b=>b.onclick=()=>{ta.value=b.dataset.fill;TT.draft=ta.value;ta.focus()});
@@ -1988,7 +2171,7 @@ function renderDay(box){
     });
   }
   const ch=$("ttChat");const atBottom=ch.scrollHeight-ch.scrollTop-ch.clientHeight<60;const prevN=+ch.dataset.n||0;
-  const n=(d.chat||[]).length+(TT.busy?1:0);const sig=n+":"+(d.chat||[]).filter(m=>m.undone).length;
+  const n=(d.chat||[]).length+(TT.busy?1:0);const sig=chatSig(d);
   if(ch.dataset.sig!==sig||!ch.innerHTML){ch.innerHTML=chatHtml(d);ch.dataset.n=n;ch.dataset.sig=sig;if(atBottom||n>prevN)ch.scrollTop=ch.scrollHeight}
   const keepOpen=$("dayTasks").querySelector("details")?.open;
   $("dayTasks").innerHTML=tasksHtml(d);
@@ -2026,6 +2209,7 @@ function ttSetAvatar(file){
 function ttPopBuild(){
   const pop=$("ttPop");
   pop.innerHTML=`<div class="ph"><div class="avatar">${ttAvatar()}</div><div class="nm"><h3>Thanh Thanh</h3><button type="button" class="mini ghost" id="ttpMode" title="Cài đặt AI" style="padding:1px 6px;font-size:11px">…</button></div>
+      <button type="button" class="mini ghost" id="ttpAsk" title="Hỏi trước: đề xuất rồi sếp bấm Đồng ý mới làm. Tự làm: làm ngay (có Hoàn tác).">${ttAskLabel()}</button>
       <button type="button" class="mini ghost" id="ttpAv" title="Đổi ảnh đại diện">🖼</button>${(()=>{try{return localStorage.getItem("skm-tt-avatar")}catch(e){return ""}})()?'<button type="button" class="mini ghost" id="ttpAvX" title="Về ảnh hoa mặc định">↺</button>':""}
       <button type="button" class="mini ghost" id="ttpBig" title="Mở tab Today lớn (Today list + chat)">⤢ Today</button>
       <button type="button" class="mini ghost" id="ttpX" title="Thu nhỏ" aria-label="Đóng">✕</button>
@@ -2039,12 +2223,13 @@ function ttPopBuild(){
   $("ttpSend").onclick=()=>ttSend(ta.value);
   $("ttpMic").onclick=()=>micToggle($("ttpMic"),ta);
   $("ttpMode").onclick=()=>openAiSettings();
+  $("ttpAsk").onclick=ttAskToggle;
   $("ttpX").onclick=()=>ttPopToggle(false);
   $("ttpBig").onclick=()=>{ttPopToggle(false);$("tabDay").click()};
   $("ttpAv").onclick=()=>$("ttpAvF").click();
   $("ttpAvF").onchange=e=>ttSetAvatar(e.target.files[0]);
   if($("ttpAvX"))$("ttpAvX").onclick=()=>{try{localStorage.removeItem("skm-tt-avatar")}catch(e){}TTP.built=false;if($("ttAvBig"))$("ttAvBig").innerHTML=ttAvatar();renderPop()};
-  $("ttpChat").addEventListener("click",e=>{const u=e.target.closest("[data-undo]");if(u)ttUndo(+u.dataset.undo)});
+  $("ttpChat").addEventListener("click",e=>{const u=e.target.closest("[data-undo]");if(u){ttUndo(+u.dataset.undo);return}const ok=e.target.closest("[data-pok]");if(ok){ttPlanDecide(+ok.dataset.pok,true);return}const no=e.target.closest("[data-pno]");if(no)ttPlanDecide(+no.dataset.pno,false)});
   $("ttpChips").addEventListener("click",e=>{
     const q=e.target.closest("[data-q]");if(q){ttSend(q.dataset.q);return}
     const f=e.target.closest("[data-fill]");if(f){ta.value=f.dataset.fill;TT.draft=ta.value;ta.focus();return}
@@ -2071,7 +2256,7 @@ function renderPop(){
   const ch=$("ttpChat");
   if(!d){ch.innerHTML=`<div class="msg tt">Em đang mở Today list hôm nay…</div>`;return}
   const atBottom=ch.scrollHeight-ch.scrollTop-ch.clientHeight<60;const prevN=+ch.dataset.n||0;
-  const n=(d.chat||[]).length+(TT.busy?1:0);const sig=n+":"+(d.chat||[]).filter(m=>m.undone).length;
+  const n=(d.chat||[]).length+(TT.busy?1:0);const sig=chatSig(d);
   if(ch.dataset.sig!==sig||!ch.innerHTML){ch.innerHTML=chatHtml(d);ch.dataset.n=n;ch.dataset.sig=sig;if(atBottom||n>prevN)ch.scrollTop=ch.scrollHeight}
   const nSel=S.sel.size;const left=(d.tasks||[]).filter(t=>!t.done).length;
   const chips=`${nSel?`<button type="button" class="mini" id="ttpSel" title="Chèn email các mail đang tick chọn vào ô nhắn">📎 Chèn ${nSel} mail đang chọn</button>`:""}
