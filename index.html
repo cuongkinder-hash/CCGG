@@ -451,6 +451,63 @@ const isLive=a=>!restricted(a);  // mặc định live, trừ khi bị hạn ch�
 const hasProblem=a=>restricted(a);
 const has2fa=a=>hasVal(a.twofaRecovery);
 const notChanged=a=>a.infoChanged!==true;
+/* PASSKEY: mỗi mail lưu 1 file JSON passkey (mã hóa như mật khẩu) — passkeyJson, passkeyName (tên file gốc), passkeyDate, passkeyDevice */
+const hasPasskey=a=>hasVal(a.passkeyJson);
+const pkInstalled=a=>a.passkeyInstalled===true;
+const pkFileName=a=>a.passkeyName||`passkey_${String(a.email||"mail").replace(/[^\w.@-]+/g,"_")}_${(a.passkeyRp||"google.com").split(",")[0].trim()}.json`;
+function passkeyCell(x){
+  const ins=`<span class="pill ${pkInstalled(x)?"t-ok":"t-warn"} tgchip" data-tg="passkeyInstalled" data-id="${x.id}" title="Bấm để đổi trạng thái cài passkey">${pkInstalled(x)?"✓ Đã cài":"Chưa cài"}</span>`;
+  return `<div class="flags" style="flex-wrap:nowrap;align-items:center">${ins}${passkeyFileCell(x)}</div>`;
+}
+function passkeyFileCell(x){
+  if(!hasPasskey(x))return '<span class="small" title="Chưa có file passkey JSON — mở mail để thêm">không file</span>';
+  const t=[x.passkeyRp?"Trang: "+x.passkeyRp:"",x.passkeyUser?"Tài khoản: "+x.passkeyUser:"",x.passkeyCreated?"Tạo lúc "+fmt(x.passkeyCreated):"",x.passkeyName||"",x.passkeyDevice?"Dùng ở: "+x.passkeyDevice:"",x.passkeyDate?"Đưa vào app "+dshow(x.passkeyDate):""].filter(Boolean).join(" · ");
+  if(pkMismatch(x))return `<div class="flags" style="flex-wrap:nowrap" title="${esc(t)}"><span class="mchip" title="File passkey là của ${esc(x.passkeyUser)}, không phải mail này">⚠️ Lệch</span><button class="mini" data-pkdl="${x.id}">⬇</button></div>`;
+  return `<div class="flags" style="flex-wrap:nowrap" title="${esc(t)}"><button class="mini" data-pkcp="${x.id}" title="Copy nội dung JSON passkey">🔐 Copy</button><button class="mini" data-pkdl="${x.id}" title="Tải file JSON passkey">⬇</button></div>`;
+}
+async function passkeyText(id){const a=accById(id);if(!a||!hasPasskey(a)){toast("Mail này chưa có passkey");return ""}return decField(a.passkeyJson)}
+/* ZIP tối giản (không nén) để tải nhiều file passkey một lần */
+const CRC_T=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
+const crc32=b=>{let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=CRC_T[(c^b[i])&255]^(c>>>8);return (c^0xFFFFFFFF)>>>0};
+function makeZip(files){ // files: [{name, text}]
+  const enc=new TextEncoder(),parts=[],central=[];let off=0;
+  const d=new Date(),dt=((d.getHours()<<11)|(d.getMinutes()<<5)|(d.getSeconds()>>1)),dd=(((d.getFullYear()-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate());
+  for(const f of files){
+    const nm=enc.encode(f.name),data=enc.encode(f.text),crc=crc32(data);
+    const h=new DataView(new ArrayBuffer(30));h.setUint32(0,0x04034b50,true);h.setUint16(4,20,true);h.setUint16(6,0x0800,true);h.setUint16(8,0,true);h.setUint16(10,dt,true);h.setUint16(12,dd,true);h.setUint32(14,crc,true);h.setUint32(18,data.length,true);h.setUint32(22,data.length,true);h.setUint16(26,nm.length,true);h.setUint16(28,0,true);
+    parts.push(new Uint8Array(h.buffer),nm,data);
+    const c=new DataView(new ArrayBuffer(46));c.setUint32(0,0x02014b50,true);c.setUint16(4,20,true);c.setUint16(6,20,true);c.setUint16(8,0x0800,true);c.setUint16(10,0,true);c.setUint16(12,dt,true);c.setUint16(14,dd,true);c.setUint32(16,crc,true);c.setUint32(20,data.length,true);c.setUint32(24,data.length,true);c.setUint16(28,nm.length,true);c.setUint32(42,off,true);
+    central.push(new Uint8Array(c.buffer),nm);off+=30+nm.length+data.length;
+  }
+  const cs=central.reduce((s,x)=>s+x.length,0);const e=new DataView(new ArrayBuffer(22));e.setUint32(0,0x06054b50,true);e.setUint16(8,files.length,true);e.setUint16(10,files.length,true);e.setUint32(12,cs,true);e.setUint32(16,off,true);
+  return new Blob([...parts,...central,new Uint8Array(e.buffer)],{type:"application/zip"});
+}
+async function downloadPasskeysZip(ids){
+  const accs=ids.map(accById).filter(a=>a&&hasPasskey(a));if(!accs.length){toast("Các mail đã chọn chưa có passkey");return}
+  const used=new Set(),files=[];
+  for(const a of accs){let n=pkFileName(a);while(used.has(n))n=n.replace(/\.json$/i,"")+"_2.json";used.add(n);files.push({name:n,text:await decField(a.passkeyJson)})}
+  const url=URL.createObjectURL(makeZip(files));const el=document.createElement("a");el.href=url;el.download=`passkey-${files.length}-mail-${new Date().toISOString().slice(0,10)}.zip`;document.body.appendChild(el);el.click();el.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
+  toast(`Đã tải ${files.length} file passkey (.zip)`+(accs.length<ids.length?` · ${ids.length-accs.length} mail chưa có passkey`:""));
+}
+async function copyPasskey(id){const v=await passkeyText(id);if(!v)return;try{await navigator.clipboard.writeText(v);toast("Đã copy passkey "+accById(id).email)}catch(e){copyFallback(v,1)}}
+async function downloadPasskey(id){const v=await passkeyText(id);if(!v)return;downloadFile(pkFileName(accById(id)),v,"application/json");toast("Đã tải file passkey")}
+/* Đọc hiểu file passkey (dạng xuất của tiện ích quản lý passkey): mảng [{alg,createdAt,id,jwk:{d,...},rpId,rpName,userHandle,userName}] hoặc 1 object.
+   Trả {ok,text,list:[{rpId,rpName,userName,createdAt,hasKey,alg}],emails,err,warn} — KHÔNG trả khóa bí mật ra ngoài. */
+function pkParse(txt){
+  const t=String(txt||"").replace(/^\uFEFF/,"").trim();if(!t)return {ok:false,err:"trống"};
+  let j;try{j=JSON.parse(t)}catch(e){return {ok:false,err:"không phải JSON hợp lệ"}}
+  const arr=(Array.isArray(j)?j:[j]).filter(x=>x&&typeof x==="object");
+  const list=arr.map(x=>({rpId:String(x.rpId||x.rp?.id||""),rpName:String(x.rpName||x.rp?.name||""),userName:String(x.userName||x.user?.name||"").toLowerCase().trim(),
+    createdAt:typeof x.createdAt==="number"?x.createdAt:null,hasKey:!!(x.jwk&&x.jwk.d)||!!x.privateKey,alg:x.alg}));
+  const emails=[...new Set(list.map(x=>x.userName).filter(e=>EMAIL_RE.test(e)))];
+  const warn=[];if(!list.length)warn.push("không thấy passkey nào trong file");else if(list.some(x=>!x.hasKey))warn.push("có passkey thiếu khóa bí mật — có thể không dùng được");
+  return {ok:true,text:t,list,emails,warn};
+}
+const pkMeta=r=>({passkeyRp:[...new Set(r.list.map(x=>x.rpId).filter(Boolean))].join(", "),passkeyUser:r.emails[0]||"",passkeyCount:r.list.length,passkeyCreated:Math.max(0,...r.list.map(x=>x.createdAt||0))||null});
+const pkInfoHtml=r=>r.ok?`<span style="color:var(--ok)">✓ ${r.list.length} passkey</span>${r.list.length?` · ${esc([...new Set(r.list.map(x=>x.rpName||x.rpId))].join(", "))} · <span class="mono">${esc(r.emails.join(", ")||"(không ghi email)")}</span>${r.list[0].createdAt?` · tạo ${fmt(r.list[0].createdAt)}`:""}`:""}${r.warn.length?` <b style="color:var(--warn)">⚠️ ${esc(r.warn.join("; "))}</b>`:""}`:`<span style="color:var(--bad)">⚠️ ${esc(r.err)}</span>`;
+/* email từ tên file kiểu passkey_<email>_<rp>.json */
+const pkNameEmail=n=>{n=String(n||"").replace(/\.json$/i,"").replace(/^passkey[_-]/i,"");const m=n.match(/[A-Za-z0-9.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*?\.[A-Za-z]{2,}(?=$|_)/);return m?m[0].toLowerCase():""};
+const pkMismatch=a=>hasPasskey(a)&&a.passkeyUser&&a.passkeyUser!==String(a.email||"").toLowerCase();
 /* Hạn SĐT: ưu tiên ngày hết hạn do người dùng nhập (phoneExpiry); dữ liệu cũ thì = ngày thêm SĐT + 90 ngày */
 const phoneExpOf=a=>a.phoneExpiry||(a.phoneDate?a.phoneDate+PHONE_DAYS*DAY:null);
 const phoneDaysLeft=a=>{const e=phoneExpOf(a);return e?Math.ceil((e-Date.now())/DAY):null};
@@ -636,7 +693,7 @@ function renderFilters(){
   if(S.staff&&!staffs.includes(S.staff))S.staff="";
   $("fStaff").innerHTML=`<option value="">Mọi nhân viên</option>`+staffs.map(s=>`<option ${s===S.staff?"selected":""}>${esc(s)}</option>`).join("");
   let opts;
-  if(S.tab==="acc")opts=[["","Tất cả"],["live","Mail đang live"],["working","Đang làm"],["redo","Chuẩn bị làm lại"],["need","Cần làm lại (hạn chế + làm lại)"],["changed_no","Chưa đổi thông tin"],["miss","Thiếu thông tin"],["phone","SĐT sắp hết hạn"],["restricted","Bị hạn chế"],["appeal_check","Cần check kháng"],["problem","Có vấn đề"],["ch:normal","Kênh bình thường"],["ch:strike","Kênh có gậy"],["ch:demonetized","Mất kiếm tiền"],["ch:limited","Kênh bị hạn chế"],["ch:terminated","Kênh bị chấm dứt"],["ac:verify","Email cần xác minh"],["ac:locked","Email bị khóa"]];
+  if(S.tab==="acc")opts=[["","Tất cả"],["live","Mail đang live"],["working","Đang làm"],["redo","Chuẩn bị làm lại"],["need","Cần làm lại (hạn chế + làm lại)"],["changed_no","Chưa đổi thông tin"],["pki_no","Chưa cài passkey"],["pki_yes","Đã cài passkey"],["pk_no","Chưa có file passkey"],["pk_yes","Đã có file passkey"],["pk_bad","Passkey lệch email"],["miss","Thiếu thông tin"],["phone","SĐT sắp hết hạn"],["restricted","Bị hạn chế"],["appeal_check","Cần check kháng"],["problem","Có vấn đề"],["ch:normal","Kênh bình thường"],["ch:strike","Kênh có gậy"],["ch:demonetized","Mất kiếm tiền"],["ch:limited","Kênh bị hạn chế"],["ch:terminated","Kênh bị chấm dứt"],["ac:verify","Email cần xác minh"],["ac:locked","Email bị khóa"]];
   else if(S.tab==="ga")opts=[["","Tất cả"],["ga_created","Đã tạo gà"],["ga_candidate","Đợi đủ điều kiện"],["ga_wait","Đang đợi duyệt"],["ga_approved","Đã duyệt"],["ga_hold","Đang giữ"],["ga_sold","Đã bán"],["ga_money","Đã bật kiếm tiền"],["ga_dissed","Bị diss mail"]];
   else if(S.tab==="px")opts=[["","Tất cả proxy"],["px_bad","Chất lượng kém (≥30% hạn chế)"],["px_mid","Trung bình (10–30%)"],["px_full","Quá tải (vượt sức chứa)"],["px_exp",`Hết hạn / còn ≤ ${PROXY_WARN_DAYS} ngày`],["px_empty","Chưa gắn mail"]];
   else if(S.tab==="key")opts=[["","Tất cả key"],["k_need","Có kênh cần làm lại"],["k_res","Có kênh bị hạn chế"],["k_empty","Chưa gắn mail"],["k_nolink","Chưa có link kênh"]];
@@ -698,6 +755,11 @@ function renderInner(){
       if(S.status==="redo"&&!isRedo(x))return false;
       if(S.status==="need"&&!needRedo(x))return false;
       if(S.status==="changed_no"&&!notChanged(x))return false;
+      if(S.status==="pki_no"&&pkInstalled(x))return false;
+      if(S.status==="pki_yes"&&!pkInstalled(x))return false;
+      if(S.status==="pk_no"&&hasPasskey(x))return false;
+      if(S.status==="pk_yes"&&!hasPasskey(x))return false;
+      if(S.status==="pk_bad"&&!pkMismatch(x))return false;
       if(S.status==="miss"&&!missingOf(x).length)return false;
       if(S.status==="phone"&&!phoneSoon(x))return false;
       if(S.status==="restricted"&&!restricted(x))return false;
@@ -705,7 +767,7 @@ function renderInner(){
       if(S.status==="problem"&&!hasProblem(x))return false;
       if(S.status.startsWith("ch:")&&x.channelStatus!==S.status.slice(3))return false;
       if(S.status.startsWith("ac:")&&x.accountStatus!==S.status.slice(3))return false;
-      if(q&&![x.email,x.staff,x.channelName,x.channelUrl,x.note,x.purchaseSource,plainPhone(x),proxyName(x),keyName(x)].join(" ").toLowerCase().includes(q))return false;
+      if(q&&![x.email,x.staff,x.channelName,x.channelUrl,x.note,x.purchaseSource,plainPhone(x),proxyName(x),keyName(x),x.passkeyDevice].join(" ").toLowerCase().includes(q))return false;
       return true;
     });
     rows.sort((x,y)=>missingOf(y).length-missingOf(x).length||(x.staff||"").localeCompare(y.staff||"","vi")||(x.email||"").localeCompare(y.email||""));
@@ -846,7 +908,7 @@ const linkBtn=(u,label)=>u?`<a href="${esc(u)}" target="_blank" rel="noopener" o
 function secCell(a){return `<div class="flags">${secBtn(a,"password","MK")}${secBtn(a,"recovery","KP")}${secBtn(a,"twofaRecovery","2FA")}</div>`}
 const linkCell=u=>u?`<a href="${esc(u)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Mở ↗</a>`:'<span class="small">—</span>';
 function accTable(rows){
-  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>SĐT (bấm copy)</th><th>Link SĐT</th><th>Hạn SĐT</th><th>Proxy</th><th>Key</th><th>Bảo mật (bấm copy)</th><th>Kênh BKT</th><th>Giai đoạn</th><th>Trạng thái</th><th>Đổi TT</th><th>Thiếu</th><th>SC</th></tr></thead><tbody>${rows.map(x=>{
+  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>SĐT (bấm copy)</th><th>Link SĐT</th><th>Hạn SĐT</th><th>Proxy</th><th>Key</th><th>Bảo mật (bấm copy)</th><th>Passkey (cài · file)</th><th>Kênh BKT</th><th>Giai đoạn</th><th>Trạng thái</th><th>Đổi TT</th><th>Thiếu</th><th>SC</th></tr></thead><tbody>${rows.map(x=>{
     const miss=missingOf(x);const c=openCount(x.id);
     return `<tr data-acc="${x.id}" class="${S.sel.has(x.id)?"picked":""}">
       <td class="selcol"><input type="checkbox" class="rowck" data-id="${x.id}" ${S.sel.has(x.id)?"checked":""}></td>
@@ -859,6 +921,7 @@ function accTable(rows){
       <td>${proxyCell(x)}</td>
       <td>${keyCell(x)}</td>
       <td>${secCell(x)}</td>
+      <td>${passkeyCell(x)}</td>
       <td class="chan">${linkCell(x.channelUrl)}</td>
       <td>${stageCell(x)}</td>
       <td><span class="pill ${restricted(x)?"t-bad":"t-ok"} tgchip" data-tg="restricted" data-id="${x.id}" title="Bấm để đổi">${restricted(x)?"Bị hạn chế":"Đang live"}</span></td>
@@ -868,7 +931,7 @@ function accTable(rows){
     </tr>`}).join("")}</tbody></table>`;
 }
 function gaTable(rows){
-  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>SĐT</th><th>Link SĐT</th><th>Hạn SĐT</th><th>Proxy</th><th>Key</th><th>Bảo mật</th><th>Kênh BKT</th><th>Tạo gà</th><th>Duyệt</th><th>Trạng thái gà</th><th>Xác minh / Kiếm tiền</th></tr></thead><tbody>${rows.map(x=>`<tr data-acc="${x.id}" class="${S.sel.has(x.id)?"picked":""}">
+  return `<table><thead><tr><th class="selcol"><input type="checkbox" id="selAll"></th><th>Email</th><th>Nơi</th><th>Nhân viên</th><th>SĐT</th><th>Link SĐT</th><th>Hạn SĐT</th><th>Proxy</th><th>Key</th><th>Bảo mật</th><th>Passkey</th><th>Kênh BKT</th><th>Tạo gà</th><th>Duyệt</th><th>Trạng thái gà</th><th>Xác minh / Kiếm tiền</th></tr></thead><tbody>${rows.map(x=>`<tr data-acc="${x.id}" class="${S.sel.has(x.id)?"picked":""}">
       <td class="selcol"><input type="checkbox" class="rowck" data-id="${x.id}" ${S.sel.has(x.id)?"checked":""}></td>
       <td class="mono"><span class="cpmail" data-email="${esc(x.email)}" title="Bấm để copy email">${esc(x.email)}</span></td>
       <td>${pill(LOCATION,locOf(x))}</td>
@@ -879,6 +942,7 @@ function gaTable(rows){
       <td>${proxyCell(x)}</td>
       <td>${keyCell(x)}</td>
       <td>${secCell(x)}</td>
+      <td>${passkeyCell(x)}</td>
       <td class="chan">${linkCell(x.channelUrl)}</td>
       <td>${gaDone(x)?'<span class="pill t-ok">✅ Đã tạo gà</span>':'<span class="pill t-warn">⏳ Đợi đủ ĐK</span>'}</td>
       <td>${x.gaDissed?'<span class="pill t-bad">💀 Bị diss</span>':pill(GAREVIEW,reviewOf(x))}</td>
@@ -924,6 +988,14 @@ function openAccount(id){
     <div class="field"><label for="fPx">Proxy</label><select id="fPx"><option value="">(Chưa gắn proxy)</option>${S.proxies.map(p=>{const n=proxyStats(p).total;return `<option value="${p.id}" ${p.id===x.proxyId?"selected":""}>${esc(p.name)} — ${n}/${p.cap||PROXY_CAP} mail${n>=(p.cap||PROXY_CAP)&&p.id!==x.proxyId?" (đầy)":""}</option>`}).join("")}</select></div>
     <div class="field"><label for="fKey2">Key (chủ đề)</label><select id="fKey2">${keyOptions(x.keyId)}</select></div>
     <div class="field"><label for="fTfaRec">Mã khôi phục 2FA <span class="hint">(có mã = coi như đã bật 2FA)</span></label><textarea id="fTfaRec" placeholder="${id&&hasVal(x.twofaRecovery)?"(giữ nguyên nếu để trống)":"Dán các mã dự phòng, mỗi mã một dòng"}"></textarea></div>
+    <div class="grp"><div class="gt">🔐 Passkey</div>
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="fPkIns" ${pkInstalled(x)?"checked":""} style="width:auto"> <b>Đã cài passkey</b> cho mail này</label>
+      <div id="fPkState" class="small">${hasPasskey(x)?`✅ Đã có ${x.passkeyCount>1?x.passkeyCount+" passkey":"passkey"}${x.passkeyRp?` cho <b>${esc(x.passkeyRp)}</b>`:""}${x.passkeyUser?` · <span class="mono">${esc(x.passkeyUser)}</span>`:""}${x.passkeyCreated?` · tạo ${fmt(x.passkeyCreated)}`:""}${x.passkeyName?`<br>File: <span class="mono">${esc(x.passkeyName)}</span>`:""}${pkMismatch(x)?'<br><b style="color:var(--bad)">⚠️ File này KHÔNG phải của mail này.</b>':""}`:"Chưa có passkey."}</div>
+      ${hasPasskey(x)?`<div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" class="mini" id="fPkCopy">📋 Copy JSON</button><button type="button" class="mini" id="fPkDl">⬇ Tải file</button><button type="button" class="mini danger" id="fPkDel">Xóa passkey</button></div>`:""}
+      <div class="field"><label for="fPkFile">${hasPasskey(x)?"Thay bằng file khác":"Chọn file passkey (.json)"}</label><input id="fPkFile" type="file" accept=".json,application/json"></div>
+      <div class="field"><label for="fPkTxt">Hoặc dán nội dung JSON <span class="hint">(được mã hóa)</span></label><textarea id="fPkTxt" style="min-height:70px;font-family:var(--f-mono);font-size:12px" placeholder="${hasPasskey(x)?"(giữ nguyên nếu để trống)":"{ ... }"}"></textarea><span class="hint" id="fPkHint"></span></div>
+      <div class="field"><label for="fPkDev">Lưu / dùng ở thiết bị, profile <span class="hint">(tùy chọn)</span></label><input id="fPkDev" list="pkDevL" value="${esc(x.passkeyDevice||"")}" placeholder="VD: Máy 03, Profile GoLogin 12"><datalist id="pkDevL">${[...new Set(S.accounts.map(a=>a.passkeyDevice).filter(Boolean))].map(v=>`<option value="${esc(v)}">`).join("")}</datalist></div>
+    </div>
     <div class="field"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="fRestrict" ${restricted(x)?"checked":""} style="width:auto"> Mail/kênh đang bị hạn chế</label></div>
     <div class="field"><label for="fChUrl">Kênh đang BKT (link kênh bật kiếm tiền)</label><input id="fChUrl" type="url" value="${esc(x.channelUrl)}" placeholder="https://www.youtube.com/@..."></div>
     <div class="grp"><div class="gt">Giai đoạn nuôi kênh</div>
@@ -969,6 +1041,16 @@ function openAccount(id){
   if(id&&hasVal(x.phone)){decField(x.phone).then(v=>{if(!phIn.isConnected)return;if(!phIn.value)phIn.value=v;phIn.placeholder="";phIn.dataset.loaded="1"})}
   else phIn.dataset.loaded="1";
   $("fStage").onchange=()=>{$("gaGroup").hidden=$("fStage").value!=="ga"};
+  let pkDel=false,pkName="";
+  const pkCheck=()=>{const t=$("fPkTxt").value;const el=$("fPkHint");if(!t.trim()){el.textContent="";return}const r=pkParse(t);
+    const em=$("fEmail").value.trim().toLowerCase();
+    el.innerHTML=pkInfoHtml(r)+(r.ok&&r.emails.length&&em&&!r.emails.includes(em)?`<br><b style="color:var(--bad)">⚠️ File này là passkey của ${esc(r.emails.join(", "))}, KHÔNG phải ${esc(em)}.</b>`:"")};
+  $("fPkTxt").oninput=()=>{pkName="";pkCheck()};
+  $("fPkFile").onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{$("fPkTxt").value=r.result;pkName=f.name;pkCheck()};r.readAsText(f,"UTF-8")};
+  if(id&&hasPasskey(x)){
+    $("fPkCopy").onclick=()=>copyPasskey(id);$("fPkDl").onclick=()=>downloadPasskey(id);
+    $("fPkDel").onclick=()=>{const b=$("fPkDel");if(!b.dataset.c){b.dataset.c=1;b.textContent="Bấm Lưu để xóa hẳn";pkDel=true;$("fPkState").innerHTML='<b style="color:var(--bad)">Sẽ xóa passkey khi bấm Lưu.</b>'}};
+  }
   if(id){
     const secrets={rPw:x.password,rRec:x.recovery,rTfa:x.twofaRecovery};
     $("sheetHost").querySelectorAll("[data-rev]").forEach(b=>b.onclick=async()=>{
@@ -992,7 +1074,12 @@ function openAccount(id){
       const appealVal=$("fAppeal").value;
       const appealedAt=appealVal==="appealed"?((appealOf(x)==="appealed"&&x.appealedAt)?x.appealedAt:Date.now()):null;
       const restrictVal=$("fRestrict").checked;
-      const d={email,staff:$("fStaffIn").value.trim(),location:$("fLoc").value,infoChanged:$("fChg").checked,
+      const pkTxt=$("fPkTxt").value.trim();let pkPatch={passkeyDevice:$("fPkDev").value.trim()};
+      if(pkTxt){const r=pkParse(pkTxt);if(!r.ok){$("ferr").textContent="File passkey "+r.err+".";$("bSave").disabled=false;return}
+        if(r.emails.length&&!r.emails.includes(email)&&!$("bSave").dataset.pkok){$("ferr").textContent=`File passkey là của ${r.emails.join(", ")}, không phải ${email}. Bấm Lưu lần nữa nếu vẫn muốn gắn.`;$("bSave").dataset.pkok=1;$("bSave").disabled=false;return}
+        pkPatch={...pkPatch,...pkMeta(r),passkeyJson:await encField(r.text),passkeyName:pkName||(x.passkeyName||""),passkeyDate:Date.now()}}
+      else if(pkDel)pkPatch={...pkPatch,passkeyJson:"",passkeyName:"",passkeyDate:null,passkeyRp:"",passkeyUser:"",passkeyCount:0,passkeyCreated:null};
+      const d={...pkPatch,passkeyInstalled:$("fPkIns").checked,email,staff:$("fStaffIn").value.trim(),location:$("fLoc").value,infoChanged:$("fChg").checked,
         restricted:restrictVal,channelStatus:restrictVal?"limited":"normal",channelUrl:$("fChUrl").value.trim(),phoneLink:$("fPhoneLink").value.trim(),note:$("fNote").value.trim(),
         stage:$("fStage").value,workStartDate:dparse($("fWork").value),purchaseDate:dparse($("fBuyDate").value),purchaseSource:$("fBuySrc").value.trim(),
         phoneDate:null,phoneExpiry:dparse($("fPhoneExp").value),proxyId:$("fPx").value,keyId:$("fKey2").value,appeal:appealVal,appealedAt,
@@ -1082,6 +1169,8 @@ function renderBulk(){
     <button class="mini" data-b="key">🔑 Gán key…</button>
     <button class="mini" data-b="chg1">✓ Đã đổi TT</button>
     <button class="mini" data-b="chg0">Chưa đổi TT</button>
+    <button class="mini" data-b="pki1">🔐 Đã cài passkey</button>
+    <button class="mini" data-b="pki0">Chưa cài passkey</button>
     <button class="mini" data-b="staff">Gán nhân viên…</button>`;
   const ga=`
     <button class="mini" data-b="created1">✅ Đã tạo gà</button>
@@ -1096,6 +1185,7 @@ function renderBulk(){
     <button class="mini" data-b="key">🔑 Gán key…</button>
     <button class="mini" data-b="staff">Gán nhân viên…</button>`;
   bar.innerHTML=`<span class="cnt2">Đã chọn ${n}</span>${S.tab==="ga"?ga:acc}
+    <button class="mini" data-b="pkzip">🔐 Tải passkey (.zip)</button>
     <button class="mini" data-b="copy">📋 Copy email</button>
     <button class="mini danger" data-b="del">Xóa</button>
     <button class="mini ghost" data-b="clear">Bỏ chọn</button>`;
@@ -1135,8 +1225,11 @@ function bulkAction(kind){
     return bulkWrite(ids,U({phoneExpiry:t,phoneDate:null}),`Đã đặt hạn SĐT ${ids.length} mail: ${dshow(t)}`);
   }
   if(kind==="proxy")return openAssignProxy(ids);
+  if(kind==="pkzip")return downloadPasskeysZip(ids);
   if(kind==="key")return openAssignKey(ids);
   if(kind==="chg1")return bulkWrite(ids,U({infoChanged:true}),`Đã đánh dấu ${ids.length} mail: đã đổi TT`);
+  if(kind==="pki1")return bulkWrite(ids,U({passkeyInstalled:true}),`Đã đánh dấu ${ids.length} mail: đã cài passkey`);
+  if(kind==="pki0")return bulkWrite(ids,U({passkeyInstalled:false}),`Đã đánh dấu ${ids.length} mail: chưa cài passkey`);
   if(kind==="chg0")return bulkWrite(ids,U({infoChanged:false}),`Đã đánh dấu ${ids.length} mail: chưa đổi TT`);
   if(kind==="staff"){const name=prompt(`Gán nhân viên phụ trách cho ${ids.length} mail (để trống = xóa tên):`);if(name===null)return;return bulkWrite(ids,U({staff:name.trim()}),"Đã gán nhân viên")}
   if(kind==="del"){if(!confirm(`Xóa ${ids.length} mail đã chọn? Không khôi phục được.`))return;return bulkWrite(ids,(b,id)=>b.delete(doc(db,"accounts",id)),`Đã xóa ${ids.length} mail`)}
@@ -1183,6 +1276,7 @@ const HMAP=[
   [["nhan vien","nhanvien","staff","nv","phu trach"],"staff"],
   [["khoi phuc","recovery","mail kp","mail khoi phuc","recovery email"],"recovery"],
   [["sdt","so dien thoai","phone","dien thoai","sodienthoai"],"phone"],
+  [["da cai passkey","cai passkey","passkey"],"passkeyInstalled"],
   [["ma 2fa","2fa recovery","ma khoi phuc 2fa","backup codes","ma du phong"],"twofaRecovery"],
   [["2fa","bao mat 2 lop","two factor"],"twofaFlag"],
   [["noi quan ly","noi","khu vuc","nhom","location"],"location"],
@@ -1196,10 +1290,10 @@ function mapHeader(h){const n=stripD(h);for(const[keys,f]of HMAP)if(keys.include
 function locFromText(v){const n=stripD(v);if(!n)return null;if(n.includes("cong ty")||n==="cty"||n.includes("company")||n.includes("cq")||n.includes("cong"))return "company";if(n.includes("nha")||n.includes("home"))return "home";return null}
 const EMAIL_RE=/^\S+@\S+\.\S+$/;
 /* Cột của file mẫu — tên cột khớp với HMAP ở trên (đổi tên thì phải sửa HMAP) */
-const TEMPLATE_HEAD=["Email","Mật khẩu","Mail khôi phục","SĐT","Link SĐT","Hạn SĐT","Mã 2FA","Proxy","Chủ đề","Key","Nhân viên","Nơi quản lý","Giai đoạn","Ngày mua","Nguồn mua","Ngày bắt đầu làm","Tên kênh","Link kênh","Đã đổi TT","Bị hạn chế","Ghi chú"];
+const TEMPLATE_HEAD=["Email","Mật khẩu","Mail khôi phục","SĐT","Link SĐT","Hạn SĐT","Mã 2FA","Đã cài passkey","Proxy","Chủ đề","Key","Nhân viên","Nơi quản lý","Giai đoạn","Ngày mua","Nguồn mua","Ngày bắt đầu làm","Tên kênh","Link kênh","Đã đổi TT","Bị hạn chế","Ghi chú"];
 const TEMPLATE_ROWS=[
-  ["vd.nha@gmail.com","matkhau123","kp.a@gmail.com","0901234567","https://thueso.vn/so/0901234567","25/12/2026","ABC1 DEF2 GHI3","P01","Ma Mỹ","key01","Nguyễn Văn A","Nhà","Đang làm","05/01/2026","Shop ABC","10/01/2026","Bếp Nhà Mình","https://www.youtube.com/@bepnhaminh","Có","","(dòng ví dụ - xóa trước khi nhập)"],
-  ["vd.cty@gmail.com","matkhau456","kp.b@gmail.com","0907654321","","15/01/2027","","P02|103.1.2.3:8080:user:pass","Tự sự Mỹ","key02","Trần Thị B","Công ty","Tạo gà","10/02/2026","Mối quen","","Review Công Nghệ","","","Có","(dòng ví dụ - xóa trước khi nhập)"]
+  ["vd.nha@gmail.com","matkhau123","kp.a@gmail.com","0901234567","https://thueso.vn/so/0901234567","25/12/2026","ABC1 DEF2 GHI3","Có","P01","Ma Mỹ","key01","Nguyễn Văn A","Nhà","Đang làm","05/01/2026","Shop ABC","10/01/2026","Bếp Nhà Mình","https://www.youtube.com/@bepnhaminh","Có","","(dòng ví dụ - xóa trước khi nhập)"],
+  ["vd.cty@gmail.com","matkhau456","kp.b@gmail.com","0907654321","","15/01/2027","","","P02|103.1.2.3:8080:user:pass","Tự sự Mỹ","key02","Trần Thị B","Công ty","Tạo gà","10/02/2026","Mối quen","","Review Công Nghệ","","","Có","(dòng ví dụ - xóa trước khi nhập)"]
 ];
 const yesText=v=>/^(co|x|1|yes|y|roi|da|true|ok|v)\b/.test(stripD(v));
 function stageFromText(v){const n=stripD(v);if(!n)return "none";if(n.includes("ga"))return "ga";if(n.includes("lam lai")||n.includes("redo"))return "redo";if(n.includes("dang lam")||n.includes("working"))return "working";return "none"}
@@ -1272,7 +1366,7 @@ async function importRows(parsed,defLoc,status=()=>{}){
       existing.add(email);if(phh)existPhone.set(phh,[...(existPhone.get(phh)||[]),email]);if(thh)exist2fa.set(thh,email);
       const isRes=yesText(g("restricted"));
       const d={email,staff:g("staff"),channelName:g("channelName"),channelUrl:g("channelUrl"),note:g("note"),
-        location:locFromText(g("location"))||defLoc,infoChanged:yesText(g("infoChanged")),
+        location:locFromText(g("location"))||defLoc,infoChanged:yesText(g("infoChanged")),passkeyInstalled:yesText(g("passkeyInstalled")),
         restricted:isRes,phoneLink:g("phoneLink"),channelStatus:isRes?"limited":"normal",
         stage:stageFromText(g("stage")),appeal:"none",appealedAt:null,workStartDate:parseDateFlex(g("workStartDate")),
         purchaseDate:parseDateFlex(g("purchaseDate")),purchaseSource:g("purchaseSource"),phoneDate:null,phoneExpiry:parseDateFlex(g("phoneExpiry")),
@@ -1296,9 +1390,9 @@ const importMsg=({added,pxNew,keyNew,skipped})=>{
 };
 
 /* ---------- Bảng nhập cố định (như Excel, ngay trong app) ---------- */
-const GRID_SELECT={"Nơi quản lý":["","Nhà","Công ty"],"Giai đoạn":["","Đang làm","Chuẩn bị làm lại","Tạo gà"],"Đã đổi TT":["","Có"],"Bị hạn chế":["","Có"]};
+const GRID_SELECT={"Nơi quản lý":["","Nhà","Công ty"],"Giai đoạn":["","Đang làm","Chuẩn bị làm lại","Tạo gà"],"Đã đổi TT":["","Có"],"Bị hạn chế":["","Có"],"Đã cài passkey":["","Có"]};
 const GRID_DATE=new Set(["Hạn SĐT","Ngày mua","Ngày bắt đầu làm"]);
-const GRID_W={"Email":210,"Mật khẩu":120,"Mail khôi phục":170,"SĐT":115,"Link SĐT":170,"Hạn SĐT":100,"Mã 2FA":150,"Proxy":150,"Chủ đề":120,"Key":110,"Nhân viên":110,"Nơi quản lý":100,"Giai đoạn":130,"Ngày mua":100,"Nguồn mua":110,"Ngày bắt đầu làm":110,"Tên kênh":140,"Link kênh":180,"Đã đổi TT":80,"Bị hạn chế":80,"Ghi chú":180};
+const GRID_W={"Email":210,"Mật khẩu":120,"Mail khôi phục":170,"SĐT":115,"Link SĐT":170,"Hạn SĐT":100,"Mã 2FA":150,"Đã cài passkey":100,"Proxy":150,"Chủ đề":120,"Key":110,"Nhân viên":110,"Nơi quản lý":100,"Giai đoạn":130,"Ngày mua":100,"Nguồn mua":110,"Ngày bắt đầu làm":110,"Tên kênh":140,"Link kênh":180,"Đã đổi TT":80,"Bị hạn chế":80,"Ghi chú":180};
 let GRID=null; // giữ trong bộ nhớ (không lưu đĩa vì có mật khẩu) — mất khi khóa / tải lại trang
 const gridNewRow=()=>({v:TEMPLATE_HEAD.map(()=>""),err:""});
 function gridEnsure(n){if(!GRID)GRID=[];while(GRID.length<n)GRID.push(gridNewRow())}
@@ -1376,7 +1470,7 @@ async function gridSubmit(){
 function openImport(){
   gridEnsure(10);
   sheet("Nhập hàng loạt",`
-    <div class="tabs" style="margin-top:-6px"><button type="button" class="tab" id="impT1" aria-selected="true">📝 Bảng nhập</button><button type="button" class="tab" id="impT2" aria-selected="false">📋 Dán chữ / File / AI</button></div>
+    <div class="tabs" style="margin-top:-6px"><button type="button" class="tab" id="impT1" aria-selected="true">📝 Bảng nhập</button><button type="button" class="tab" id="impT2" aria-selected="false">📋 Dán chữ / File / AI</button><button type="button" class="tab" id="impT3" aria-selected="false">🔐 Passkey JSON</button></div>
     <div class="row2" style="grid-template-columns:auto 1fr;align-items:end">
       <div class="field" style="min-width:260px"><label for="impLoc">Nơi quản lý để trống thì xếp vào:</label><select id="impLoc">${opt(LOCATION,S.loc==="company"?"company":"home")}</select></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><a class="mini" href="mau-nhap-mail.xlsx" download style="display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:8px;padding:4px 9px;font-size:12px;font-weight:600;text-decoration:none;color:var(--ink)">⬇ File Excel mẫu</a><button type="button" id="bTpl" class="mini">⬇ File CSV mẫu</button></div>
@@ -1386,6 +1480,12 @@ function openImport(){
       <div class="gridwrap"><table class="grid"><thead><tr><th class="gnum">#</th><th>Kết quả</th>${TEMPLATE_HEAD.map(h=>`<th style="min-width:${GRID_W[h]||120}px">${esc(h)}${h==="Email"?" *":""}</th>`).join("")}<th></th></tr></thead><tbody id="gridBody"></tbody></table></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" class="mini" id="gAdd10">+ 10 dòng</button><button type="button" class="mini danger" id="gClear">Xóa trắng bảng</button><span class="small" id="gridInfo" style="margin-left:auto"></span></div>
       <div id="gridMsg"></div>
+    </div>
+    <div id="impP3" hidden style="display:grid;gap:12px">
+      <p class="hint" style="margin:0">Chọn <b>nhiều file passkey (.json)</b> cùng lúc. App tự ghép mỗi file vào đúng mail theo <b>tài khoản ghi trong file</b> (trường <code class="k">userName</code>), không có thì theo tên file dạng <code class="k">passkey_&lt;email&gt;_google.com.json</code>. File được <b>mã hóa</b> trước khi lưu. Mail đã có passkey sẽ được <b>thay</b> bằng file mới (nếu tick ô bên dưới).</p>
+      <div class="field"><label for="pkFiles">Chọn các file passkey</label><input id="pkFiles" type="file" accept=".json,application/json" multiple></div>
+      <label class="small" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="pkOver" style="width:auto"> Thay passkey cũ nếu mail đã có</label>
+      <div id="pkPrev"></div>
     </div>
     <div id="impP2" hidden style="display:grid;gap:12px">
       <p class="hint" style="margin:0"><b>Chỉ email:</b> dán danh sách email, mỗi dòng một email. <b>Đầy đủ:</b> dán bảng có dòng tiêu đề, hoặc chọn file CSV/TXT. Cột nhận được: ${TEMPLATE_HEAD.map(h=>`<code class="k">${esc(h)}</code>`).join(" ")}.</p>
@@ -1399,11 +1499,42 @@ kenh02@gmail.com"></textarea></div>
       </div>
       <div id="impPrev"></div>
     </div>
-  `,`<button type="button" id="bCancel">Đóng</button><button class="primary" id="bGridAdd" disabled>➕ Thêm</button><button class="primary" id="bDo" hidden disabled>Nhập</button>`,{wide:true});
+  `,`<button type="button" id="bCancel">Đóng</button><button class="primary" id="bGridAdd" disabled>➕ Thêm</button><button class="primary" id="bDo" hidden disabled>Nhập</button><button class="primary" id="bPk" hidden disabled>🔐 Lưu passkey</button>`,{wide:true});
   $("bCancel").onclick=closeSheet;
   $("bTpl").onclick=downloadTemplate;
-  const setTab=t=>{$("impT1").setAttribute("aria-selected",t===1);$("impT2").setAttribute("aria-selected",t===2);$("impP1").hidden=t!==1;$("impP2").hidden=t!==2;$("bGridAdd").hidden=t!==1;$("bDo").hidden=t!==2};
-  $("impT1").onclick=()=>setTab(1);$("impT2").onclick=()=>setTab(2);
+  const setTab=t=>{[1,2,3].forEach(k=>{$("impT"+k).setAttribute("aria-selected",t===k);$("impP"+k).hidden=t!==k});$("bGridAdd").hidden=t!==1;$("bDo").hidden=t!==2;$("bPk").hidden=t!==3};
+  $("impT1").onclick=()=>setTab(1);$("impT2").onclick=()=>setTab(2);$("impT3").onclick=()=>setTab(3);
+  // ---- passkey JSON hàng loạt
+  let pkPlan=[];
+  const pkRender=()=>{const ok=pkPlan.filter(x=>x.acc&&!x.err&&(!x.has||$("pkOver").checked));
+    $("pkPrev").innerHTML=pkPlan.length?`<div class="tgrp">${pkPlan.map(x=>`<div class="titem" style="cursor:default"><span class="mono small">${esc(x.name)}</span><span class="small">${x.err?`<b style="color:var(--bad)">${esc(x.err)}</b>`:`→ <b>${esc(x.acc.email)}</b>${x.rp?` <span class="small">(${esc(x.rp)})</span>`:""}${x.warn?.length?` <b style="color:var(--warn)">⚠️ ${esc(x.warn.join("; "))}</b>`:""}${x.has?($("pkOver").checked?' <span style="color:var(--warn)">(thay cũ)</span>':' <span style="color:var(--muted)">(đã có — bỏ qua)</span>'):""}`}</span></div>`).join("")}</div>`:"";
+    $("bPk").disabled=!ok.length;$("bPk").textContent=ok.length?`🔐 Lưu ${ok.length} passkey`:"🔐 Lưu passkey"};
+  $("pkOver").onchange=pkRender;
+  $("pkFiles").onchange=async e=>{
+    const known=emailSet();pkPlan=[];
+    for(const f of e.target.files){
+      const text=await f.text();const r=pkParse(text);
+      // 1) userName trong file  2) email trong tên file (passkey_<email>_<trang>.json)  3) email bất kỳ trong nội dung
+      const inFile=r.ok?r.emails.filter(e=>known.has(e)):[];
+      const byName=pkNameEmail(f.name);
+      const anyBody=[...new Set((text.match(EMAIL_FIND)||[]).map(x=>x.toLowerCase()))].filter(x=>known.has(x));
+      const pick=inFile.length===1?inFile[0]:(byName&&known.has(byName)?byName:(anyBody.length===1?anyBody[0]:""));
+      const acc=pick?known.get(pick):null;
+      let err=!r.ok?"File "+r.err:!acc?(r.emails.length?`Mail ${r.emails.join(", ")} chưa có trong hệ thống`:inFile.length>1||anyBody.length>1?"File có nhiều email — đổi tên file thành passkey_<email>.json":"Không tìm thấy email (đặt tên file = passkey_<email>.json)"):"";
+      const warn=r.ok?[...r.warn,...(byName&&r.emails.length&&!r.emails.includes(byName)?[`tên file ghi ${byName} nhưng trong file là ${r.emails.join(", ")}`]:[])]:[];
+      pkPlan.push({name:f.name,text:r.text,meta:r.ok?pkMeta(r):{},acc,has:acc?hasPasskey(acc):false,err,warn,rp:r.ok?[...new Set(r.list.map(x=>x.rpName||x.rpId))].join(", "):""});
+    }
+    const seen=new Map();pkPlan.forEach(x=>{if(x.acc&&!x.err){if(seen.has(x.acc.id))x.err="Trùng mail với file "+seen.get(x.acc.id);else seen.set(x.acc.id,x.name)}});
+    pkRender();
+  };
+  $("bPk").onclick=async()=>{
+    const ok=pkPlan.filter(x=>x.acc&&!x.err&&(!x.has||$("pkOver").checked));if(!ok.length)return;
+    const b=$("bPk");b.disabled=true;b.textContent="Đang mã hóa & lưu…";
+    try{let batch=writeBatch(db),n=0;
+      for(const x of ok){batch.update(doc(db,"accounts",x.acc.id),{...x.meta,passkeyJson:await encField(x.text),passkeyName:x.name,passkeyDate:Date.now(),updatedAt:Date.now()});if(++n>=400){await batch.commit();batch=writeBatch(db);n=0}}
+      if(n)await batch.commit();closeSheet();toast(`Đã lưu passkey cho ${ok.length} mail`)}
+    catch(e){$("pkPrev").insertAdjacentHTML("afterbegin",`<div class="err">Lỗi: ${esc(e.code||e.message)}</div>`);b.disabled=false;b.textContent="Thử lại"}
+  };
   // ---- bảng
   gridRender();
   const tb=$("gridBody");
@@ -1458,17 +1589,17 @@ async function exportCsv(){
   const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
   const yn=v=>v?"Có":"";
   // các cột đầu giống hệt file mẫu nhập → xuất ra có thể nhập lại được
-  const head=[...TEMPLATE_HEAD,"Còn (ngày SĐT)","Tình trạng kháng","Xác minh DT","Thuế","Bank","Kiếm tiền","Duyệt gà","Gà đã bán","Nối vào","Thiếu"];
+  const head=[...TEMPLATE_HEAD,"Còn (ngày SĐT)","Tình trạng kháng","Xác minh DT","Thuế","Bank","Kiếm tiền","Duyệt gà","Gà đã bán","Nối vào","Thiếu","Passkey JSON","Thiết bị passkey"];
   const lines=[];
   const dd=t=>t?dshow(t):"";
   for(const a of S.accounts){
     const p=a.proxyId?proxyById(a.proxyId):null;const k=a.keyId?keyById(a.keyId):null;
     lines.push([a.email,await decField(a.password),await decField(a.recovery),await decField(a.phone),a.phoneLink||"",dd(phoneExpOf(a)),
-      await decField(a.twofaRecovery),p?p.name:"",k?(k.topic||""):"",k?k.name:"",a.staff,LOCATION[locOf(a)][0].replace(/^\S+\s/,""),STAGE[stageOf(a)][0],
+      await decField(a.twofaRecovery),yn(a.passkeyInstalled),p?p.name:"",k?(k.topic||""):"",k?k.name:"",a.staff,LOCATION[locOf(a)][0].replace(/^\S+\s/,""),STAGE[stageOf(a)][0],
       dd(a.purchaseDate),a.purchaseSource,dd(a.workStartDate),a.channelName||"",a.channelUrl||"",yn(a.infoChanged),yn(restricted(a)),a.note,
       phoneDaysLeft(a)??"",APPEAL[appealOf(a)][0],
       yn(a.idVerified),yn(a.taxAdded),yn(a.bankAdded),yn(a.monetized),isGa(a)?GAREVIEW[reviewOf(a)][0]:"",yn(a.gaSold),a.gaLinkedTo,
-      missingOf(a).join(" / ")].map(q).join(","));
+      missingOf(a).join(" / "),await decField(a.passkeyJson),a.passkeyDevice||""].map(q).join(","));
   }
   const csv="﻿"+[head.map(q).join(","),...lines].join("\r\n");
   downloadFile(`so-mail-${new Date().toISOString().slice(0,10)}.csv`,csv);
@@ -1737,7 +1868,7 @@ ${Object.entries(TT_ACTS).map(([k,v])=>`   - ${k}: ${v.help}`).join("\n")}
    - Sếp nói tắt tên (kenh12) → tìm email khớp trong DANH SÁCH MAIL rồi đưa vào emails.
    - Một câu có thể sinh nhiều thao tác, theo thứ tự (vd them_key rồi gán key cho mail; them_mail rồi sua_mail).
    - Yêu cầu mơ hồ, không rõ mail nào, hoặc XÓA mà sếp chưa nói rõ → hỏi lại trước, thao_tac để rỗng. Xóa tối đa 50 mail mỗi lần.
-   - MẬT KHẨU và MÃ 2FA: KHÔNG sửa qua chat (để mật khẩu không gửi qua AI) → bảo sếp mở mail tự nhập.
+   - MẬT KHẨU, MÃ 2FA và FILE PASSKEY (JSON): KHÔNG sửa qua chat (để mật khẩu không gửi qua AI) → bảo sếp mở mail tự nhập.
    - Đã có thao tác thì KHÔNG cần tạo thêm việc trong Today list cho chính thao tác đó.
    Các trường không dùng để chuỗi rỗng: doi_tuong="", truong="", gia_tri="", muc_do="", chi_tiet="".
 tra_loi: tiếng Việt tự nhiên, ngắn (thường 1–5 câu); danh sách thì dùng "- " đầu dòng; không dùng markdown đậm/nghiêng.`;
@@ -1775,7 +1906,8 @@ const TT_MAIL_FIELDS={email:["email","Email (chỉ 1 mail)","email"],kenh_bkt:["
   sdt:["phone","SĐT (chỉ 1 mail)","phone"],mail_khoi_phuc:["recovery","Mail/SĐT khôi phục","secret"],nguon_mua:["purchaseSource","Nguồn mua","text"],ngay_mua:["purchaseDate","Ngày mua","date"],
   ngay_bat_dau_lam:["workStartDate","Ngày bắt đầu làm","date"],ghi_chu:["note","Ghi chú (THAY toàn bộ)","text"],noi_vao:["gaLinkedTo","Gà nối vào mail","text"],
   xac_minh_dt:["idVerified","Đã xác minh danh tính","bool"],thue:["taxAdded","Đã thêm thuế","bool"],bank:["bankAdded","Đã thêm bank","bool"],kiem_tien:["monetized","Đã bật kiếm tiền","bool"],
-  ga_da_tao:["gaCreated","Đã tạo gà","bool"],ga_duyet:["gaReview","Gà đã duyệt","bool"],ga_da_ban:["gaSold","Gà đã bán","bool"],ga_bi_diss:["gaDissed","Gà bị diss","bool"]};
+  ga_da_tao:["gaCreated","Đã tạo gà","bool"],ga_duyet:["gaReview","Gà đã duyệt","bool"],ga_da_ban:["gaSold","Gà đã bán","bool"],ga_bi_diss:["gaDissed","Gà bị diss","bool"],
+  thiet_bi_passkey:["passkeyDevice","Thiết bị/profile dùng passkey","text"],da_cai_passkey:["passkeyInstalled","Đã cài passkey","bool"]};
 const TT_PX_FIELDS={ten:"tên",server:"ip:port hoặc ip:port:user:pass",nha_cung_cap:"nhà cung cấp",han:"ngày hết hạn",suc_chua:"số mail tối đa",ghi_chu:"ghi chú",loai:"http|socks5"};
 const TT_KEY_FIELDS={ten:"tên key",chu_de:"chuyển sang chủ đề",them_link:"thêm link (mỗi dòng 1 link)",xoa_link:"bỏ link",dat_link:"thay toàn bộ link",ghi_chu:"ghi chú"};
 const TT_FIELD_ENUM=["",...new Set([...Object.keys(TT_MAIL_FIELDS),...Object.keys(TT_PX_FIELDS),...Object.keys(TT_KEY_FIELDS)])];
@@ -1968,7 +2100,7 @@ const chatSig=d=>{const c=d.chat||[];return c.length+(TT.busy?1:0)+":"+c.filter(
 function ttContext(){
   const d=todayDoc()||{tasks:[],issues:[]};
   const prev=S.days.filter(x=>x.id<dayKey())[0];
-  const mails=S.accounts.map(a=>{const pd=phoneDaysLeft(a);return [a.email,isGa(a)?"gà":restricted(a)?"bị hạn chế":"live",STAGE[stageOf(a)][0],APPEAL[appealOf(a)][0],a.infoChanged?"đã đổi TT":"chưa đổi TT",proxyName(a)||"-",keyName(a)||"-",pd===null?"-":pd+"d",a.staff||"-"].join(" | ")}).join("\n");
+  const mails=S.accounts.map(a=>{const pd=phoneDaysLeft(a);return [a.email,isGa(a)?"gà":restricted(a)?"bị hạn chế":"live",STAGE[stageOf(a)][0],APPEAL[appealOf(a)][0],a.infoChanged?"đã đổi TT":"chưa đổi TT",(pkInstalled(a)?"đã cài passkey":"chưa cài passkey")+(hasPasskey(a)?"+có file":""),proxyName(a)||"-",keyName(a)||"-",pd===null?"-":pd+"d",a.staff||"-"].join(" | ")}).join("\n");
   return `HÔM NAY: ${dayLabel(dayKey())}
 TODAY LIST hiện tại (id | nhóm | trạng thái | nội dung | emails):
 ${(d.tasks||[]).map(t=>`${t.id} | ${t.group} | ${t.done?"ĐÃ XONG":"chưa"}${t.carriedFrom?` | dồn từ ${dayShort(t.carriedFrom)}`:""} | ${t.text} | ${(t.emails||[]).join(", ")}`).join("\n")||"(trống)"}
@@ -1981,7 +2113,7 @@ THAO TÁC ĐÃ LÀM HÔM NAY: ${(d.actions||[]).map(a=>`${hm(a.at)} ${a.text}${a
 ĐỀ XUẤT SẾP ĐÃ BỎ QUA HÔM NAY: ${(d.chat||[]).filter(m=>m.plan?.status==="rejected").map(m=>m.plan.preview.join("; ")).join(" | ")||"(không có)"}
 SỰ CỐ ĐANG MỞ (mã | email | loại | mức | mô tả): ${S.incidents.filter(i=>i.status!=="resolved").slice(0,100).map(i=>`${i.id.slice(0,8)} | ${accById(i.accountId)?.email||"(mail đã xóa)"} | ${INC_TYPE[i.type]||i.type} | ${i.severity} | ${(i.detail||"").slice(0,60)}`).join("; ")||"(không có)"}
 KEY (chủ đề / key: mail, đang làm, bị hạn chế, chuẩn bị làm lại, cần làm lại, số link kênh): ${S.keys.map(k=>{const st=keyStats(k);return `${topicOf(k)} / ${k.name}: ${st.total} mail, làm ${st.working}, hạn chế ${st.res}, làm lại ${st.redo}, cần làm lại ${st.need}, ${keyLinks(k).length} link`}).join("; ")||"(chưa có)"}
-DANH SÁCH MAIL (${S.accounts.length}) — email | trạng thái | giai đoạn | kháng | đổi TT | proxy | key | SĐT còn | nhân viên:
+DANH SÁCH MAIL (${S.accounts.length}) — email | trạng thái | giai đoạn | kháng | đổi TT | passkey | proxy | key | SĐT còn | nhân viên:
 ${mails||"(trống)"}`;
 }
 const TT_SCHEMA=()=>jObj({tra_loi:jStr,
@@ -2312,13 +2444,15 @@ async function demoSeed(){
     const phone="09"+String(10000000+n*13579).slice(0,8);
     batch.set(doc(db,"accounts","demo-"+n),{
       email:`kenh${String(n).padStart(2,"0")}.demo@gmail.com`,staff:staffs[n%4],location:n%3===0?"company":"home",
-      infoChanged:n%4!==0,restricted:res,channelStatus:res?"limited":"normal",
+      infoChanged:n%4!==0,passkeyInstalled:n%2===0,restricted:res,channelStatus:res?"limited":"normal",
       channelUrl:n%3!==1?`https://www.youtube.com/@kenhdemo${n}`:"",channelName:`Kênh demo ${n}`,
       phoneLink:n%2?`https://thueso.example/so/${phone}`:"",phoneDate:null,phoneExpiry:today+(r(-5,120))*DAY,
       proxyId:n<=40?pxIds[0]:n<=60?pxIds[1]:n<=68?pxIds[2]:"",keyId:n%11===0?"":keyIds[Math.floor(n/2)%6],
       stage:ga?"ga":res?"none":(n%5===0?"redo":"working"),appeal:res?(n%12===0?"appealed":"wait_appeal"):"none",appealedAt:res&&n%12===0?now-3*DAY:null,
       workStartDate:today-r(5,60)*DAY,purchaseDate:today-r(30,120)*DAY,purchaseSource:n%2?"Shop ABC":"Mối quen",note:"",
       idVerified:ga,taxAdded:ga&&n%2===0,bankAdded:false,monetized:false,gaSold:false,gaDissed:false,gaCreated:ga,gaLinkedTo:"",gaReview:"waiting",
+      passkeyJson:n%3===0?await encField(JSON.stringify([{alg:-7,createdAt:now-n*DAY,id:"demo-cred-"+n,jwk:{crv:"P-256",d:"(khoa-gia-demo)",kty:"EC",x:"x",y:"y"},rpId:"google.com",rpName:"Google",signCount:0,userName:`kenh${String(n).padStart(2,"0")}.demo@gmail.com`}],null,2)):"",passkeyName:n%3===0?`passkey_kenh${String(n).padStart(2,"0")}.demo@gmail.com_google.com.json`:"",
+      passkeyRp:n%3===0?"google.com":"",passkeyUser:n%3===0?`kenh${String(n).padStart(2,"0")}.demo@gmail.com`:"",passkeyCount:n%3===0?1:0,passkeyCreated:n%3===0?now-n*DAY:null,passkeyDate:n%3===0?today-r(1,40)*DAY:null,passkeyDevice:n%3===0?"Máy 0"+(1+n%4):"",
       password:await encField("Demo@"+n),recovery:n%5?await encField(`kp${n}@gmail.com`):"",phone:n%10?await encField(phone):"",
       phoneHash:n%10?await hashPhone(phone):"",twofaRecovery:n%3?await encField(`AAAA-${n} BBBB-${n}`):"",twofaHash:n%3?await hash2fa(`AAAA-${n} BBBB-${n}`):"",
       createdAt:now,updatedAt:now});
@@ -2452,7 +2586,7 @@ async function aiRun(btn,label,outEl,fn){
 /* Bản tóm tắt KHÔNG bí mật của một mail — đây là thứ duy nhất gửi lên AI */
 function aiRow(a){
   const r={email:a.email,noi:locOf(a)==="company"?"công ty":"nhà",nhan_vien:a.staff||"",giai_doan:STAGE[stageOf(a)][0],
-    trang_thai:restricted(a)?"bị hạn chế":"live",sdt_con_ngay:phoneDaysLeft(a),da_doi_tt:!notChanged(a),
+    trang_thai:restricted(a)?"bị hạn chế":"live",sdt_con_ngay:phoneDaysLeft(a),da_doi_tt:!notChanged(a),da_cai_passkey:pkInstalled(a),file_passkey:hasPasskey(a)?`có${a.passkeyRp?" ("+a.passkeyRp+")":""}${a.passkeyDevice?", dùng ở "+a.passkeyDevice:""}${pkMismatch(a)?", LỆCH: file của "+a.passkeyUser:""}`:"chưa",
     thieu:missingOf(a),khang:APPEAL[appealOf(a)][0],can_check_khang:needAppealCheck(a),su_co_dang_mo:openCount(a.id),
     proxy:proxyName(a)||"(chưa gắn)",key:keyName(a)||"(chưa gắn)"};
   if(phoneExpOf(a))r.han_sdt=dinput(phoneExpOf(a));
@@ -2673,7 +2807,7 @@ async function aiAnalyzeIncident(incId){
 }
 
 /* ---------- ✨ Nhập hàng loạt: AI tách cột ---------- */
-const AI_IMP_FIELDS=[["email","Email"],["password","Mật khẩu"],["recovery","Mail khôi phục"],["phone","SĐT"],["phoneLink","Link SĐT"],["phoneExpiry","Hạn SĐT"],["twofaRecovery","Mã 2FA"],["proxy","Proxy"],["topic","Chủ đề"],["key","Key"],["staff","Nhân viên"],["location","Nơi quản lý"],["purchaseDate","Ngày mua"],["purchaseSource","Nguồn mua"],["channelName","Tên kênh"],["channelUrl","Link kênh"],["note","Ghi chú"]];
+const AI_IMP_FIELDS=[["email","Email"],["password","Mật khẩu"],["recovery","Mail khôi phục"],["phone","SĐT"],["phoneLink","Link SĐT"],["phoneExpiry","Hạn SĐT"],["twofaRecovery","Mã 2FA"],["passkeyInstalled","Đã cài passkey"],["proxy","Proxy"],["topic","Chủ đề"],["key","Key"],["staff","Nhân viên"],["location","Nơi quản lý"],["purchaseDate","Ngày mua"],["purchaseSource","Nguồn mua"],["channelName","Tên kênh"],["channelUrl","Link kênh"],["note","Ghi chú"]];
 async function aiSplitImport(preview){
   const txt=$("impText").value.trim();
   if(!txt){$("aiImpOut").innerHTML=`<div class="err">Dán dữ liệu vào ô phía trên trước.</div>`;return}
@@ -2682,7 +2816,7 @@ async function aiSplitImport(preview){
     const out=await aiCall({
       system:AI_CONTEXT+`\nNhiệm vụ: chuyển dữ liệu dán lộn xộn thành danh sách tài khoản. Mỗi tài khoản là một email.
 - Chép NGUYÊN VĂN giá trị (mật khẩu, mã… không được sửa, không đoán). Thiếu thì để chuỗi rỗng.
-- recovery: mail hoặc SĐT khôi phục. phone: SĐT gắn với tài khoản. twofaRecovery: các mã dự phòng 2FA, cách nhau bằng dấu cách.
+- recovery: mail hoặc SĐT khôi phục. phone: SĐT gắn với tài khoản. twofaRecovery: các mã dự phòng 2FA, cách nhau bằng dấu cách. passkeyInstalled: "Có" nếu dữ liệu nói đã cài passkey, không thì rỗng.
 - phoneLink: link trang quản lý/thuê số của SĐT. phoneExpiry: ngày hết hạn SĐT. proxy: tên proxy hoặc chuỗi ip:port:user:pass, chép nguyên văn. topic: chủ đề (vd "Ma Mỹ"), key: tên key, nếu dữ liệu có.
 - location: "Nhà" hoặc "Công ty" nếu dữ liệu nói rõ, không thì rỗng. Mọi ngày (purchaseDate, phoneExpiry) ghi định dạng YYYY-MM-DD.
 - Bỏ qua dòng không chứa email.`,
@@ -2733,6 +2867,8 @@ async function copySecret(id,field){const a=accById(id);if(!a||!hasVal(a[field])
 async function toggleField(id,f){const a=accById(id);if(!a)return;const cur=!!a[f];const data={[f]:!cur,updatedAt:Date.now()};if(f==="restricted"){data.channelStatus=!cur?"limited":"normal";if(!cur&&stageOf(a)==="working")data.stage="none"}try{await updateDoc(doc(db,"accounts",id),data)}catch(e){toast("Lỗi: "+(e.code||e.message))}}
 $("list").addEventListener("click",e=>{
   const ph=e.target.closest("[data-cpphone]");if(ph){const a=accById(ph.dataset.cpphone);const v=a?plainPhone(a):"";if(v)navigator.clipboard.writeText(v).then(()=>toast("Đã copy SĐT "+v),()=>copyFallback(v,1));e.stopPropagation();return}
+  const pkc=e.target.closest("[data-pkcp]");if(pkc){copyPasskey(pkc.dataset.pkcp);e.stopPropagation();return}
+  const pkd=e.target.closest("[data-pkdl]");if(pkd){downloadPasskey(pkd.dataset.pkdl);e.stopPropagation();return}
   const pc=e.target.closest("[data-pxcp]");if(pc){copyProxy(pc.dataset.pxcp);e.stopPropagation();return}
   const po=e.target.closest("[data-pxopen]");if(po){openProxy(po.dataset.pxopen);e.stopPropagation();return}
   const pr=e.target.closest("tr[data-px]");if(pr){openProxy(pr.dataset.px);return}
