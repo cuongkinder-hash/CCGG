@@ -482,6 +482,14 @@ function makeZip(files){ // files: [{name, text}]
   const cs=central.reduce((s,x)=>s+x.length,0);const e=new DataView(new ArrayBuffer(22));e.setUint32(0,0x06054b50,true);e.setUint16(8,files.length,true);e.setUint16(10,files.length,true);e.setUint32(12,cs,true);e.setUint32(16,off,true);
   return new Blob([...parts,...central,new Uint8Array(e.buffer)],{type:"application/zip"});
 }
+async function downloadBridge(){
+  try{
+    const names=["cau_noi.py","Bat-Thanh-Thanh.bat","HUONG-DAN.txt"],files=[];
+    for(const n of names){const r=await fetch("cau-noi/"+n,{cache:"no-store"});if(!r.ok)throw new Error(n+": "+r.status);files.push({name:"thanh-thanh-cau-noi/"+n,text:await r.text()})}
+    const url=URL.createObjectURL(makeZip(files));const el=document.createElement("a");el.href=url;el.download="thanh-thanh-cau-noi.zip";document.body.appendChild(el);el.click();el.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
+    toast("Đã tải cầu nối — giải nén rồi làm theo HUONG-DAN.txt");
+  }catch(e){toast("Không tải được cầu nối: "+e.message)}
+}
 async function downloadPasskeysZip(ids){
   const accs=ids.map(accById).filter(a=>a&&hasPasskey(a));if(!accs.length){toast("Các mail đã chọn chưa có passkey");return}
   const used=new Set(),files=[];
@@ -2556,7 +2564,7 @@ async function aiCall({system,user,messages,schema,effort="low",maxTokens=32000}
 }
 function aiErr(e){
   if(e&&e.needSetup)return "Chưa cài AI — bấm ⚙️ AI để chọn gói tháng (cầu nối) hoặc khóa API.";
-  if(e&&e.bridgeDown)return e.aborted?"Cầu nối trả lời quá lâu — thử lại.":"Chưa bật cầu nối Thanh Thanh trên máy này — bấm đúp file Bat-Thanh-Thanh.bat rồi thử lại.";
+  if(e&&e.bridgeDown)return e.aborted?"Cầu nối trả lời quá lâu — thử lại.":"Chưa bật cầu nối Thanh Thanh trên máy này — bấm đúp file Bat-Thanh-Thanh.bat rồi thử lại. (Máy mới: ⚙️ AI → Tải cầu nối.)";
   if(e&&e.bridgeMsg)return e.message;
   const A=AI.SDK;
   if(A){
@@ -2629,6 +2637,7 @@ async function openAiSettings(msg){
     <div class="grp" id="grpBridge">
       <div class="gt">🌸 Cầu nối gói tháng</div>
       <p class="hint" style="margin:0">Trên máy này bấm đúp file <code class="k">thanh-thanh-cau-noi\Bat-Thanh-Thanh.bat</code> và để cửa sổ đó mở trong lúc dùng. Cần Claude Code đã đăng nhập bằng tài khoản gói tháng. Chung hạn mức với lúc bạn chat Claude bình thường.</p>
+      <p class="hint" style="margin:0">Máy mới (vd máy ở nhà) chưa có cầu nối? <button type="button" class="mini" id="bBrDl">⬇ Tải cầu nối (.zip)</button> — giải nén, đọc <code class="k">HUONG-DAN.txt</code>.</p>
       <div class="row2">
         <div class="field"><label for="brModel">Mô hình</label><select id="brModel">${opt(AI_MODELS,bridgeModel())}</select></div>
         <div class="field"><label for="brUrl">Địa chỉ cầu nối</label><input id="brUrl" value="${esc(bridgeUrl())}"></div>
@@ -2647,6 +2656,7 @@ async function openAiSettings(msg){
     <div id="aiTestOut"></div>
   `,`<button type="button" id="bCancel">Đóng</button><button class="primary" id="bAiSave">Lưu &amp; kiểm tra</button>`);
   $("bCancel").onclick=closeSheet;
+  $("bBrDl").onclick=downloadBridge;
   const sel=()=>document.querySelector('input[name="aiMode"]:checked').value;
   const sync=()=>{$("grpBridge").hidden=sel()!=="bridge";$("grpApi").hidden=sel()!=="api"};
   document.querySelectorAll('input[name="aiMode"]').forEach(r=>r.onchange=sync);sync();

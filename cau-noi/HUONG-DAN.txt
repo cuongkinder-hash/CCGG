@@ -1,0 +1,25 @@
+CẦU NỐI THANH THANH — CÀI CHO MÁY MỚI (làm 1 lần)
+==================================================
+
+Cầu nối giúp app "Sổ Kênh & Mail" dùng Thanh Thanh bằng GÓI THÁNG Claude
+(không tốn tiền API). Dữ liệu và trí nhớ của Thanh Thanh nằm trên Firebase,
+nên máy nào cũng thấy giống nhau — chỉ cần mỗi máy có cầu nối riêng.
+
+1) Cài Python: https://www.python.org/downloads/
+   Lúc cài NHỚ TICK ô "Add python.exe to PATH".
+
+2) Cài Claude Code (tiện ích "Claude Code" trong VS Code, hoặc bản dòng lệnh)
+   và ĐĂNG NHẬP bằng tài khoản Claude đang trả gói tháng.
+
+3) Giải nén thư mục này ra chỗ cố định, ví dụ  D:\He thong\thanh-thanh-cau-noi
+
+4) Bấm đúp  Bat-Thanh-Thanh.bat  → cửa sổ đen hiện "Cầu nối Thanh Thanh",
+   dòng "Claude Code:" phải có số phiên bản. Để cửa sổ này mở trong lúc dùng.
+
+5) Mở https://cuongkinder-hash.github.io/CCGG/ → ⚙️ AI → chọn "Gói tháng Claude"
+   → Lưu & kiểm tra. Nếu Chrome hỏi quyền truy cập mạng cục bộ: bấm Cho phép.
+
+Lưu ý:
+- Hai máy dùng chung hạn mức gói tháng.
+- Đừng chat với Thanh Thanh trên 2 máy CÙNG LÚC (có thể mất 1 tin nhắn).
+- Thư mục này chỉ có code, không chứa mật khẩu hay khóa nào.
